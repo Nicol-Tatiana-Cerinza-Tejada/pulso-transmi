@@ -123,10 +123,11 @@ async def open_cycle(
         """
         insert into competition.cycle_targets
             (cycle_id,station_id,target_at,horizon_steps)
-        select $1, station_id, $2 + make_interval(mins => horizon * 15), horizon
+        select $1::bigint, station_id,
+               $2::timestamptz + make_interval(mins => horizon * 15), horizon
         from sim.scenario_stations
         cross join generate_series(1,4) as horizon
-        where scenario_id=$3 and is_benchmark
+        where scenario_id=$3::bigint and is_benchmark
         """,
         cycle["id"],
         virtual_now,
