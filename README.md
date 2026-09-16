@@ -48,6 +48,18 @@ reproducibles.
 El contrato definitivo de competencia se congelará antes de entregar API keys.
 Hasta entonces, los detalles marcados como *planificados* pueden cambiar.
 
+## Dataset estático para comenzar
+
+La rama experimental incluye un corte seguro de entrenamiento en
+[`data/starter/`](data/starter/README.md): 45 días, 12 estaciones reales como
+catálogo, frecuencia de 15 minutos y 51.840 observaciones sintéticas. No contiene
+ninguno de los siete días reservados para competencia ni expone parámetros
+privados del generador.
+
+Los archivos separan estaciones, demanda y contexto para aproximarse al futuro
+contrato de API. `metadata.json` fija versión, semilla, rango y hashes; el corte
+se valida con `experiments/validate_starter.py` antes de distribuirlo.
+
 ## Arquitectura
 
 ```text

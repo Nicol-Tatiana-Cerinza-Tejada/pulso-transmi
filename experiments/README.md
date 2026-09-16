@@ -12,6 +12,8 @@ uv venv /tmp/pulso-transmi-experiment
 uv pip install --python /tmp/pulso-transmi-experiment/bin/python -r experiments/requirements.txt
 /tmp/pulso-transmi-experiment/bin/python experiments/calibrate.py
 /tmp/pulso-transmi-experiment/bin/python experiments/sweep.py
+/tmp/pulso-transmi-experiment/bin/python experiments/export_starter.py
+/tmp/pulso-transmi-experiment/bin/python experiments/validate_starter.py
 ```
 
 Los resultados se escriben en `experiments/results/`:
