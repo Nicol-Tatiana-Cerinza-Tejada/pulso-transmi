@@ -6,3 +6,5 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+experiments/results/competition_predictions.csv
+experiments/results/hourly_sample.csv

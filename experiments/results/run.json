@@ -1,0 +1,7 @@
+{
+  "seed": 20260916,
+  "raw_rows": 59904,
+  "train_examples": 43764,
+  "competition_examples": 8052,
+  "competition_start": "2026-09-09T00:00:00-05:00"
+}
