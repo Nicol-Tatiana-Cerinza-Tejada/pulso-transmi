@@ -1,0 +1,29 @@
+# Preview only. Install under /etc/caddy after explicit publication approval.
+pulso-transmi.72-60-245-2.sslip.io {
+	encode zstd gzip
+
+	@public path /health /docs /docs/* /openapi.json /v1/*
+	handle @public {
+		reverse_proxy 127.0.0.1:8010
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/pulso-transmi.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format json
+	}
+}

@@ -54,6 +54,14 @@ def store(request: Request) -> StarterStore:
     return request.app.state.starter
 
 
+def validate_range(start: datetime | None, end: datetime | None) -> None:
+    for name, value in (("start", start), ("end", end)):
+        if value is not None and value.utcoffset() is None:
+            raise HTTPException(status_code=422, detail=f"{name} must include a timezone offset")
+    if start is not None and end is not None and start > end:
+        raise HTTPException(status_code=422, detail="start must be before or equal to end")
+
+
 @app.get("/health", tags=["operations"])
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "pulso-transmi-api"}
@@ -107,8 +115,7 @@ async def observations(
     cursor: str | None = None,
     limit: int = Query(default=1000, ge=1, le=5000),
 ) -> dict[str, object]:
-    if start is not None and end is not None and start > end:
-        raise HTTPException(status_code=422, detail="start must be before or equal to end")
+    validate_range(start, end)
     try:
         page = store(request).observation_page(
             station_id=station_id, start=start, end=end, cursor=cursor, limit=limit
@@ -126,8 +133,7 @@ async def context(
     cursor: str | None = None,
     limit: int = Query(default=1000, ge=1, le=5000),
 ) -> dict[str, object]:
-    if start is not None and end is not None and start > end:
-        raise HTTPException(status_code=422, detail="start must be before or equal to end")
+    validate_range(start, end)
     try:
         page = store(request).context_page(start=start, end=end, cursor=cursor, limit=limit)
     except InvalidCursor as exc:

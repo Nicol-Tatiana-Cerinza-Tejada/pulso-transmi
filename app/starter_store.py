@@ -108,7 +108,10 @@ class StarterStore:
         position = bisect_left(self._observation_keys, (start, "")) if start is not None else 0
         if cursor is not None:
             raw_timestamp, raw_station = _decode_cursor(cursor, 2)
-            cursor_key = (datetime.fromisoformat(raw_timestamp), raw_station)
+            try:
+                cursor_key = (datetime.fromisoformat(raw_timestamp), raw_station)
+            except ValueError as exc:
+                raise InvalidCursor("invalid cursor") from exc
             position = max(position, bisect_right(self._observation_keys, cursor_key))
 
         rows: list[dict[str, Any]] = []
@@ -137,7 +140,11 @@ class StarterStore:
         position = bisect_left(self._context_keys, start) if start is not None else 0
         if cursor is not None:
             raw_timestamp = _decode_cursor(cursor, 1)[0]
-            position = max(position, bisect_right(self._context_keys, datetime.fromisoformat(raw_timestamp)))
+            try:
+                cursor_timestamp = datetime.fromisoformat(raw_timestamp)
+            except ValueError as exc:
+                raise InvalidCursor("invalid cursor") from exc
+            position = max(position, bisect_right(self._context_keys, cursor_timestamp))
         rows = []
         for row in self.contexts[position:]:
             if end is not None and row["observed_at"] > end:

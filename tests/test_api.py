@@ -57,6 +57,15 @@ def test_invalid_cursor_is_rejected() -> None:
     assert response.status_code == 400
 
 
+def test_naive_timestamp_is_rejected() -> None:
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/observations", params={"start": "2026-08-01T00:00:00"}
+        )
+    assert response.status_code == 422
+    assert "timezone" in response.json()["detail"]
+
+
 def test_context_and_download() -> None:
     with TestClient(app) as client:
         context = client.get("/v1/context", params={"limit": 3}).json()
