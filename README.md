@@ -83,7 +83,7 @@ Redis, Celery ni un broker en esta versión.
 | FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.3.0`) |
 | Scheduler | Reloj, publicación, apertura, resolución, scoring y snapshots | Implementado; espera escenario |
 | Caddy | TLS y exposición pública del servicio | Operativo |
-| GitHub Actions | Pipeline gratuito de cada estudiante | Starter kit público |
+| GitHub Actions | Pipeline gratuito de cada estudiante | Flujo metodológico publicado; starter técnico pendiente |
 | Supabase | Persistencia gratuita de cada solución estudiantil | A cargo de cada equipo |
 | Vercel | Dashboard opcional | Bono |
 
@@ -268,6 +268,8 @@ El detalle, la evidencia y los criterios de salida se mantienen en
 
 ## Documentación
 
+- [Guía metodológica para estudiantes v1.0](docs/guides/pulso-transmi-guia-metodologica-v1.0.pdf)
+- [Versiones de la guía metodológica](docs/guides/README.md)
 - [Progreso y próximos hitos](docs/progress.md)
 - [Arquitectura](docs/architecture.md)
 - [Modelo de datos y métrica](docs/data-model.md)
