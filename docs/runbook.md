@@ -8,9 +8,9 @@
 
 La API publica únicamente `127.0.0.1:8010`. PostgreSQL no publica puertos.
 
-La configuración candidata de Caddy vive en
-`deploy/caddy/pulso-transmi.caddy`. No debe instalarse hasta recibir aprobación
-explícita para publicar. Externamente solo expone `/health`, `/docs`,
+La configuración activa de Caddy está versionada en
+`deploy/caddy/pulso-transmi.caddy` e instalada como
+`/etc/caddy/pulso-transmi.caddy`. Externamente solo expone `/health`, `/docs`,
 `/openapi.json` y `/v1/*`; `/ready` permanece interno.
 
 ## Despliegue

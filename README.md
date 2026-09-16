@@ -6,10 +6,10 @@ consumen observaciones que aparecen con el tiempo, entrenan y reentrenan modelos
 envían pronósticos y compiten en un leaderboard que cambia cuando el sistema
 introduce nuevos patrones y drift.
 
-> **Estado candidato — 16 de septiembre de 2026:** la versión `0.2.0` añade un
-> dataset estático seguro y endpoints públicos de lectura. Está preparada para
-> validación interna, pero todavía no se ha publicado. El reloj, las entregas y
-> el leaderboard continúan pendientes.
+> **API pública — 16 de septiembre de 2026:** la versión `0.2.0` ofrece un
+> dataset estático seguro y endpoints públicos de lectura en
+> `https://pulso-transmi.72-60-245-2.sslip.io`. El reloj, las entregas y el
+> leaderboard continúan pendientes.
 
 ## Qué se aprende
 
@@ -78,20 +78,21 @@ Redis, Celery ni un broker en esta versión.
 | Componente | Responsabilidad | Estado |
 |---|---|---|
 | PostgreSQL 17 | Catálogo, simulación privada, competencia y auditoría | Operativo |
-| FastAPI | Salud, catálogo, historia, contexto y descargas | Candidata interna |
+| FastAPI | Salud, catálogo, historia, contexto y descargas | Pública (`0.2.0`) |
 | Scheduler | Heartbeat; después avanzará el reloj, liberará y evaluará | Parcial |
-| Caddy | TLS y exposición pública del servicio | Pendiente |
-| GitHub Actions | Pipeline gratuito de cada estudiante | Plantilla pendiente |
+| Caddy | TLS y exposición pública del servicio | Operativo |
+| GitHub Actions | Pipeline gratuito de cada estudiante | Starter kit público |
 | Supabase | Persistencia gratuita de cada solución estudiantil | A cargo de cada equipo |
 | Vercel | Dashboard opcional | Bono |
 
 La arquitectura detallada está en [docs/architecture.md](docs/architecture.md) y
 el modelo relacional en [docs/data-model.md](docs/data-model.md).
 
-## API candidata `0.2.0`
+## API pública `0.2.0`
 
-La API local se publica en `http://127.0.0.1:8010`. Swagger queda disponible en
-`/docs` mientras el servicio esté levantado.
+La API pública está en `https://pulso-transmi.72-60-245-2.sslip.io`; Swagger se
+encuentra en `/docs`. En el VPS el proceso escucha únicamente en
+`http://127.0.0.1:8010` y Caddy controla la superficie pública.
 
 | Método | Ruta | Propósito | Requiere BD |
 |---|---|---|---|
@@ -182,16 +183,17 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-La cobertura actual solo valida el endpoint de salud. Las pruebas de integración
-de base de datos y los flujos de competencia forman parte del trabajo pendiente.
+La suite cubre salud, metadatos, filtros, paginación, descargas y controles de
+entrada. Las pruebas de integración de base de datos y los flujos de competencia
+forman parte del trabajo pendiente.
 
 ## Operación en el VPS
 
 - **Ruta:** `/opt/pulso-transmi`
 - **API interna:** `127.0.0.1:8010`
 - **PostgreSQL:** sin puerto publicado al host
-- **URL candidata:** `https://pulso-transmi.72-60-245-2.sslip.io`
-- **Exposición pública:** pendiente de aprobación y configuración Caddy
+- **URL pública:** `https://pulso-transmi.72-60-245-2.sslip.io`
+- **Exposición pública:** Caddy con HTTPS; `/ready` permanece solo en loopback
 
 El procedimiento de despliegue, diagnóstico, backup y recuperación vive en el
 [runbook del VPS](docs/runbook.md). No copies `.env`, tokens ni contraseñas a

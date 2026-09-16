@@ -1,4 +1,4 @@
-# Preview only. Install under /etc/caddy after explicit publication approval.
+# Public read-only API. The application itself remains bound to loopback.
 pulso-transmi.72-60-245-2.sslip.io {
 	encode zstd gzip
 
