@@ -81,12 +81,17 @@ async def submit(
             cycle = await connection.fetchrow(
                 """
                 select id, public_id, scenario_id, data_cutoff, closes_at, state
-                from competition.forecast_cycles where public_id = $1 for update
+                from competition.forecast_cycles where public_id = $1
                 """,
                 payload.cycle_id,
             )
             if cycle is None:
                 raise HTTPException(status_code=404, detail={"code": "cycle_not_found", "message": "Forecast cycle not found"})
+            await connection.execute(
+                "select pg_advisory_xact_lock($1::integer,$2::integer)",
+                cycle["id"],
+                identity.participant_id,
+            )
             server_now = await connection.fetchval("select now()")
             if cycle["state"] != "open" or server_now >= cycle["closes_at"]:
                 raise HTTPException(status_code=409, detail={"code": "cycle_closed", "message": "Forecast cycle is closed"})
