@@ -1,0 +1,40 @@
+version: 1
+code: p1-example
+timezone: America/Bogota
+history_days: 45
+competition_days: 7
+interval_minutes: 15
+forecast_horizons: [1, 2, 3, 4]
+station_count: 12
+
+generation:
+  archetypes:
+    residential: 3
+    business: 2
+    interchange: 3
+    university: 2
+    leisure: 2
+  spatial_neighbors: 3
+  city_autocorrelation: 0.85
+  station_autocorrelation: 0.60
+  noise_strength: 0.08
+
+drifts:
+  - type: peak_shift
+    competition_day: 3
+    transition_hours: 24
+    station_count: 4
+    minutes: 45
+    level_multiplier: 1.18
+  - type: closure
+    competition_day: 5
+    station_count: 1
+    demand_multiplier: 0.40
+    redistribute_fraction: 0.50
+
+calibration:
+  seasonal_naive_accuracy_min: 75
+  seasonal_naive_accuracy_max: 84
+  boosted_model_accuracy_min: 85
+  boosted_model_accuracy_max: 93
+  minimum_drift_drop_points: 10

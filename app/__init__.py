@@ -1,0 +1,1 @@
+"""Pulso TransMi central platform."""
