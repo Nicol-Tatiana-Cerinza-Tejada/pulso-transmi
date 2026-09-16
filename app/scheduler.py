@@ -106,8 +106,9 @@ async def open_cycle(
         insert into competition.forecast_cycles
             (public_id,scenario_id,origin_at,data_cutoff,opens_at,closes_at,
              target_start_at,target_end_at,state)
-        values ($1,$2,$3,$3,now(),now()+$4::interval,
-                $3+interval '15 minutes',$3+interval '60 minutes','open')
+        values ($1,$2,$3::timestamptz,$3::timestamptz,now(),now()+$4::interval,
+                $3::timestamptz+interval '15 minutes',
+                $3::timestamptz+interval '60 minutes','open')
         on conflict (scenario_id,origin_at) do nothing
         returning id
         """,
