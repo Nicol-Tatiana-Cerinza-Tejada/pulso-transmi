@@ -6,11 +6,10 @@ consumen observaciones que aparecen con el tiempo, entrenan y reentrenan modelos
 envían pronósticos y compiten en un leaderboard que cambia cuando el sistema
 introduce nuevos patrones y drift.
 
-> **Estado actual — 16 de septiembre de 2026:** la infraestructura base `0.1.0`
-> está desplegada y saludable en el VPS. La API solo ofrece salud, readiness y
-> metadatos; el reloj, el generador, las entregas y el leaderboard todavía no
-> están activos. Consulta la [bitácora de progreso](docs/progress.md) antes de usar
-> el entorno como competencia.
+> **Estado candidato — 16 de septiembre de 2026:** la versión `0.2.0` añade un
+> dataset estático seguro y endpoints públicos de lectura. Está preparada para
+> validación interna, pero todavía no se ha publicado. El reloj, las entregas y
+> el leaderboard continúan pendientes.
 
 ## Qué se aprende
 
@@ -48,6 +47,13 @@ reproducibles.
 El contrato definitivo de competencia se congelará antes de entregar API keys.
 Hasta entonces, los detalles marcados como *planificados* pueden cambiar.
 
+## Dataset inicial
+
+[`data/starter/`](data/starter/README.md) contiene 45 días de historia, 12
+estaciones, frecuencia de 15 minutos y 51.840 observaciones sintéticas. El corte
+no incluye los siete días reservados para competencia ni parámetros privados del
+generador. Los hashes y el rango temporal están fijados en `metadata.json`.
+
 ## Arquitectura
 
 ```text
@@ -72,7 +78,7 @@ Redis, Celery ni un broker en esta versión.
 | Componente | Responsabilidad | Estado |
 |---|---|---|
 | PostgreSQL 17 | Catálogo, simulación privada, competencia y auditoría | Operativo |
-| FastAPI | Salud, metadatos y futura API de competencia | Parcial |
+| FastAPI | Salud, catálogo, historia, contexto y descargas | Candidata interna |
 | Scheduler | Heartbeat; después avanzará el reloj, liberará y evaluará | Parcial |
 | Caddy | TLS y exposición pública del servicio | Pendiente |
 | GitHub Actions | Pipeline gratuito de cada estudiante | Plantilla pendiente |
@@ -82,7 +88,7 @@ Redis, Celery ni un broker en esta versión.
 La arquitectura detallada está en [docs/architecture.md](docs/architecture.md) y
 el modelo relacional en [docs/data-model.md](docs/data-model.md).
 
-## API disponible hoy
+## API candidata `0.2.0`
 
 La API local se publica en `http://127.0.0.1:8010`. Swagger queda disponible en
 `/docs` mientras el servicio esté levantado.
@@ -91,7 +97,11 @@ La API local se publica en `http://127.0.0.1:8010`. Swagger queda disponible en
 |---|---|---|---|
 | `GET` | `/health` | Liveness del proceso | No |
 | `GET` | `/ready` | Conectividad con PostgreSQL | Sí |
-| `GET` | `/v1/meta` | Proyecto, estaciones cargadas y escenario activo | Sí |
+| `GET` | `/v1/meta` | Versión, manifiesto y enlaces | No |
+| `GET` | `/v1/stations` | Catálogo de 12 estaciones | No |
+| `GET` | `/v1/observations` | Demanda paginada y filtrable | No |
+| `GET` | `/v1/context` | Clima y eventos paginados | No |
+| `GET` | `/v1/downloads/{filename}` | CSV y manifiesto estáticos | No |
 
 Respuesta esperada de salud:
 
@@ -99,10 +109,9 @@ Respuesta esperada de salud:
 {"status":"ok","service":"pulso-transmi-api"}
 ```
 
-Los endpoints de reloj, estaciones, observaciones, ciclos, submissions,
-leaderboard y baselines aún están planificados. No construyas integraciones de
-estudiantes contra rutas inexistentes; revisa primero el
-[contrato de API](docs/api-contract.md).
+Los endpoints de reloj, ciclos, submissions, leaderboard y baselines siguen
+planificados. Revisa el [contrato de API](docs/api-contract.md) antes de construir
+integraciones.
 
 ## Inicio rápido local
 
@@ -148,6 +157,7 @@ forma controlada; borrar el volumen no es un mecanismo de migración.
 curl --fail http://127.0.0.1:8010/health
 curl --fail http://127.0.0.1:8010/ready
 curl --fail http://127.0.0.1:8010/v1/meta
+curl --fail 'http://127.0.0.1:8010/v1/observations?limit=10'
 docker compose logs --tail=50 scheduler
 ```
 
@@ -180,7 +190,8 @@ de base de datos y los flujos de competencia forman parte del trabajo pendiente.
 - **Ruta:** `/opt/pulso-transmi`
 - **API interna:** `127.0.0.1:8010`
 - **PostgreSQL:** sin puerto publicado al host
-- **Exposición pública:** pendiente de dominio y configuración Caddy
+- **URL candidata:** `https://pulso-transmi.72-60-245-2.sslip.io`
+- **Exposición pública:** pendiente de aprobación y configuración Caddy
 
 El procedimiento de despliegue, diagnóstico, backup y recuperación vive en el
 [runbook del VPS](docs/runbook.md). No copies `.env`, tokens ni contraseñas a

@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -10,6 +11,7 @@ class Settings(BaseSettings):
     scheduler_poll_seconds: int = 30
     scheduler_instance: str = "primary"
     skip_db_startup: bool = False
+    starter_data_dir: Path = Path("data/starter")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
