@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     scheduler_instance: str = "primary"
     skip_db_startup: bool = False
     starter_data_dir: Path = Path("data/starter")
+    submission_max_bytes: int = 65_536
+    submission_max_attempts: int = 3
+    submission_rate_limit_per_minute: int = 10
+    release_interval_minutes: int = 30
+    submission_window_minutes: int = 25
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

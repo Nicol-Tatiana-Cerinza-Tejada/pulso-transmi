@@ -1,6 +1,17 @@
-# Public read-only API. The application itself remains bound to loopback.
+# Public API. The application itself remains bound to loopback.
 pulso-transmi.72-60-245-2.sslip.io {
 	encode zstd gzip
+
+	@submissions {
+		method POST
+		path /v1/submissions
+	}
+	handle @submissions {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy 127.0.0.1:8010
+	}
 
 	@public path /health /docs /docs/* /openapi.json /v1/*
 	handle @public {

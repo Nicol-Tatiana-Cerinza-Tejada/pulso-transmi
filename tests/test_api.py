@@ -14,12 +14,13 @@ def test_health() -> None:
     assert response.json()["status"] == "ok"
 
 
-def test_meta_describes_safe_static_cut() -> None:
+def test_meta_describes_safe_static_cut_and_stream() -> None:
     with TestClient(app) as client:
         payload = client.get("/v1/meta").json()
-    assert payload["mode"] == "static-starter"
+    assert payload["mode"] == "starter-and-competition-stream"
     assert payload["dataset"]["observation_rows"] == 51_840
     assert payload["dataset"]["future_included"] is False
+    assert payload["links"]["stream_observations"] == "/v1/stream/observations"
 
 
 def test_stations_preserve_official_text_ids() -> None:

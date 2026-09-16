@@ -1,96 +1,187 @@
-# Contrato de API `0.2.0`
+# Contrato de API `0.3.0`
 
-La versión `0.2.0` sirve un corte estático de entrenamiento. Todas las rutas de
-esta sección son públicas y de solo lectura. La API dinámica conservará las
-formas de paginación, pero podrá añadir campos compatibles.
+Este documento es el contrato técnico de la plataforma central. Los clientes
+deben descubrir el ciclo vigente en la API y nunca inferirlo a partir de la hora
+local de una máquina o de un cron.
 
-## Operación
+Base pública: `https://pulso-transmi.72-60-245-2.sslip.io`
 
-### `GET /health`
+## Convenciones
 
-Liveness del proceso; no consulta PostgreSQL.
+- Fechas y horas: ISO 8601 con zona horaria.
+- IDs de estación: texto de cinco dígitos; no convertir a entero.
+- Demanda: números finitos, no negativos y menores o iguales a `100000`.
+- Respuestas dinámicas: `Cache-Control: no-store`, salvo el leaderboard (30 s).
+- Cada respuesta incluye `X-Request-ID`; debe guardarse al diagnosticar errores.
+- La API key va en `Authorization: Bearer $PULSO_API_KEY`, nunca en el JSON.
 
-### `GET /ready`
+## Dataset inicial
 
-Comprueba PostgreSQL y reporta la versión del dataset cargado.
+`GET /v1/stations`, `GET /v1/observations`, `GET /v1/context` y
+`GET /v1/downloads/{filename}` sirven el corte estático de entrenamiento. Este
+corte no cambia y no contiene futuro de competencia. La paginación usa un
+`next_cursor` opaco que solo debe copiarse a la petición siguiente.
 
-## Datos públicos
+## Stream incremental
 
-### `GET /v1/meta`
+### `GET /v1/stream/observations`
 
-Devuelve versión de API, modo, manifiesto completo y enlaces de descubrimiento.
-El manifiesto declara explícitamente `future_included: false`.
-
-### `GET /v1/stations`
-
-Devuelve las 12 estaciones con ID oficial tratado como texto, nombre, corredor,
-latitud y longitud.
-
-### `GET /v1/observations`
-
-Parámetros opcionales:
-
-| Parámetro | Tipo | Regla |
-|---|---|---|
-| `station_id` | texto | ID exacto de cinco caracteres |
-| `start` | ISO 8601 con zona | Inclusive |
-| `end` | ISO 8601 con zona | Inclusive |
-| `cursor` | texto opaco | Cursor devuelto por la página anterior |
-| `limit` | entero | 1–5.000; por defecto 1.000 |
-
-Respuesta:
+Entrega las observaciones liberadas por el reloj de competencia, en orden de
+liberación. Acepta `cursor` y `limit` (1–5000).
 
 ```json
 {
-  "data": [
-    {
-      "observed_at": "2026-07-26T00:00:00-05:00",
-      "station_id": "02300",
-      "demand": 313
-    }
-  ],
+  "data": [{
+    "station_id": "02300",
+    "observed_at": "2026-09-16T10:15:00-05:00",
+    "demand": 341,
+    "released_at": "2026-09-16T10:30:03-05:00"
+  }],
   "count": 1,
-  "next_cursor": "WyIyMDI2..."
+  "next_cursor": null,
+  "server_time": "2026-09-16T10:30:04-05:00"
 }
 ```
 
-El cliente debe tratar `next_cursor` como opaco. Cuando sea `null`, terminó el
-recorrido. No debe construir ni modificar cursores.
+El collector debe hacer `upsert` por `(station_id, observed_at)` y guardar el
+cursor solo después de confirmar la transacción en Supabase. Así, repetir una
+página no duplica datos.
 
-### `GET /v1/context`
+## Reloj y ciclo
 
-Usa `start`, `end`, `cursor` y `limit` con las mismas reglas. Cada timestamp
-contiene lluvia y temperatura observadas/pronosticadas e intensidad de evento.
+### `GET /v1/clock`
 
-### `GET /v1/downloads/{filename}`
+Devuelve `virtual_now`, número de tick y estado. Sin escenario activo responde
+`200` con `state: "waiting"`.
 
-Archivos permitidos:
+### `GET /v1/forecast-cycles/current`
 
-- `stations.csv`
-- `observations.csv`
-- `context.csv`
-- `metadata.json`
+Devuelve el ciclo abierto, su `data_cutoff`, cierre y el conjunto exacto de
+targets. Sin ciclo abierto devuelve `404 no_open_cycle`. Esta respuesta es la
+única fuente válida para construir una entrega.
 
-La respuesta incluye un `ETag` basado en SHA-256. Cualquier otro nombre devuelve
-404 y no permite acceso arbitrario al filesystem.
-
-## Errores
-
-- `400`: cursor inválido.
-- `404`: descarga inexistente.
-- `422`: parámetros inválidos, rango invertido o límite fuera de rango.
-- `503`: PostgreSQL no disponible en `/ready`.
-
-## Planificado
-
-```text
-GET  /v1/clock
-GET  /v1/forecast-cycles/current
-POST /v1/submissions
-GET  /v1/submissions/{public_id}
-GET  /v1/leaderboard
-GET  /v1/baselines
+```json
+{
+  "cycle_id": "cyc_p1_20260916T150000Z",
+  "state": "open",
+  "origin_at": "2026-09-16T10:00:00-05:00",
+  "data_cutoff": "2026-09-16T10:00:00-05:00",
+  "opens_at": "2026-09-16T10:00:02-05:00",
+  "closes_at": "2026-09-16T10:25:02-05:00",
+  "expected_predictions": 48,
+  "targets": [{
+    "station_id":"02300",
+    "target_at":"2026-09-16T10:15:00-05:00",
+    "horizon_minutes":15
+  }]
+}
 ```
 
-Las submissions requerirán API key, `cycle_id`, `model_version`, `data_cutoff`
-y una predicción no negativa y finita para cada target requerido.
+## Identidad
+
+### `GET /v1/me`
+
+Requiere API key y devuelve la identidad resuelta en el servidor. El estudiante
+no envía nombre, correo o equipo en una submission: esto evita suplantación y
+mantiene un único identificador oficial.
+
+## Enviar predicciones
+
+### `POST /v1/submissions`
+
+Headers obligatorios:
+
+```http
+Authorization: Bearer ptm_live_...secret...
+Content-Type: application/json
+Idempotency-Key: gha-123456789-1
+```
+
+Payload `1.0`:
+
+```json
+{
+  "schema_version": "1.0",
+  "cycle_id": "cyc_p1_20260916T150000Z",
+  "client_run_id": "github-123456789-1",
+  "data_cutoff": "2026-09-16T10:00:00-05:00",
+  "model": {
+    "version": "xgb-20260916.2",
+    "trained_at": "2026-09-16T09:54:00-05:00",
+    "training_data_end": "2026-09-16T10:00:00-05:00",
+    "git_commit": "abcdef1234567"
+  },
+  "predictions": [{
+    "station_id":"02300",
+    "target_at":"2026-09-16T10:15:00-05:00",
+    "value":321.5
+  }]
+}
+```
+
+Reglas de aceptación:
+
+1. el ciclo existe, está abierto y no llegó a `closes_at`;
+2. el participante está activo en ese escenario;
+3. `data_cutoff` es idéntico al del ciclo;
+4. `training_data_end` no supera el corte;
+5. llegan todos los targets y solamente esos targets;
+6. no hay extras, duplicados, `NaN`, infinitos ni negativos;
+7. el body máximo es 64 KB y hay máximo tres intentos por ciclo;
+8. el último intento válido reemplaza al anterior como entrega oficial.
+
+Una entrega nueva devuelve `201`. Repetirla con igual `Idempotency-Key` devuelve
+el mismo recibo con `200`, sin duplicarla. Reutilizar la llave con otro contenido
+devuelve `409`.
+
+```json
+{
+  "submission_id": "sub_5f...",
+  "status": "accepted",
+  "attempt": 2,
+  "received_at": "2026-09-16T10:08:11-05:00",
+  "closes_at": "2026-09-16T10:25:02-05:00",
+  "predictions_received": 48,
+  "expected_predictions": 48,
+  "is_official": true,
+  "payload_hash": "sha256:...",
+  "replaced_submission_id": "sub_1a..."
+}
+```
+
+### `GET /v1/submissions/{submission_id}`
+
+Requiere la misma API key. Devuelve el recibo y si continúa siendo oficial;
+nunca permite consultar entregas de otro participante.
+
+## Leaderboard
+
+### `GET /v1/leaderboard?window=cumulative`
+
+`window` acepta `cumulative` o `rolling_24h`. Publica nombre, tipo,
+elegibilidad, accuracy, WAPE crudo, accuracy@20, cobertura, posición y fecha.
+No publica API keys, parámetros de modelos ni predicciones individuales.
+
+La métrica oficial calcula WAPE por estación, transforma cada resultado a
+`100 × max(0, 1 − WAPE)` y promedia estaciones. Un target faltante se evalúa
+como cero; la cobertura muestra la confiabilidad operacional.
+
+## Errores relevantes
+
+| HTTP | Código | Significado |
+|---|---|---|
+| 400 | `invalid_cursor` | Cursor alterado o ilegible |
+| 401 | `invalid_api_key` | Falta, formato incorrecto, revocada o inválida |
+| 403 | `participant_inactive` | Sin acceso activo al escenario |
+| 404 | `cycle_not_found` / `no_open_cycle` | Ciclo inválido o sin ventana activa |
+| 409 | `cycle_closed` | La ventana ya cerró |
+| 409 | `idempotency_conflict` | Misma llave, payload diferente |
+| 409 | `attempt_limit_reached` | Ya se consumieron tres intentos |
+| 413 | `payload_too_large` | Body mayor a 64 KB |
+| 415 | `unsupported_media_type` | No se envió JSON |
+| 422 | `invalid_target_set` | Faltan targets, sobran o están repetidos |
+| 429 | `rate_limited` | Más de diez intentos por minuto y API key |
+
+Los errores de negocio se entregan bajo `detail.code`; los de esquema usan la
+validación estándar de FastAPI. El cliente debe registrar status, body y
+`X-Request-ID`, pero nunca imprimir la API key.

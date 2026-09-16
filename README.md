@@ -6,10 +6,11 @@ consumen observaciones que aparecen con el tiempo, entrenan y reentrenan modelos
 envían pronósticos y compiten en un leaderboard que cambia cuando el sistema
 introduce nuevos patrones y drift.
 
-> **API pública — 16 de septiembre de 2026:** la versión `0.2.0` ofrece un
-> dataset estático seguro y endpoints públicos de lectura en
-> `https://pulso-transmi.72-60-245-2.sslip.io`. El reloj, las entregas y el
-> leaderboard continúan pendientes.
+> **API pública — 16 de septiembre de 2026:** la versión `0.3.0` conserva el
+> dataset estático y añade el protocolo de competencia: stream incremental,
+> reloj, ciclos, API keys, submissions idempotentes, scoring y leaderboard en
+> `https://pulso-transmi.72-60-245-2.sslip.io`. El escenario permanece detenido
+> hasta cargar y validar el ground truth definitivo.
 
 ## Qué se aprende
 
@@ -31,7 +32,8 @@ reproducibles.
 ## Dinámica prevista
 
 - **Frecuencia de observación:** 15 minutos.
-- **Ciclo de entrega:** cada hora.
+- **Publicación:** cada 30 minutos se liberan dos intervalos nuevos por estación.
+- **Ciclo de entrega:** cada hora, con ventana de 25 minutos.
 - **Horizonte:** cuatro intervalos futuros —15, 30, 45 y 60 minutos— para cada
   estación requerida.
 - **Escenario inicial:** 12 estaciones, 45 días de historia y 7 días de
@@ -78,8 +80,8 @@ Redis, Celery ni un broker en esta versión.
 | Componente | Responsabilidad | Estado |
 |---|---|---|
 | PostgreSQL 17 | Catálogo, simulación privada, competencia y auditoría | Operativo |
-| FastAPI | Salud, catálogo, historia, contexto y descargas | Pública (`0.2.0`) |
-| Scheduler | Heartbeat; después avanzará el reloj, liberará y evaluará | Parcial |
+| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.3.0`) |
+| Scheduler | Reloj, publicación, apertura, resolución, scoring y snapshots | Implementado; espera escenario |
 | Caddy | TLS y exposición pública del servicio | Operativo |
 | GitHub Actions | Pipeline gratuito de cada estudiante | Starter kit público |
 | Supabase | Persistencia gratuita de cada solución estudiantil | A cargo de cada equipo |
@@ -88,7 +90,7 @@ Redis, Celery ni un broker en esta versión.
 La arquitectura detallada está en [docs/architecture.md](docs/architecture.md) y
 el modelo relacional en [docs/data-model.md](docs/data-model.md).
 
-## API pública `0.2.0`
+## API pública `0.3.0`
 
 La API pública está en `https://pulso-transmi.72-60-245-2.sslip.io`; Swagger se
 encuentra en `/docs`. En el VPS el proceso escucha únicamente en
@@ -101,8 +103,15 @@ encuentra en `/docs`. En el VPS el proceso escucha únicamente en
 | `GET` | `/v1/meta` | Versión, manifiesto y enlaces | No |
 | `GET` | `/v1/stations` | Catálogo de 12 estaciones | No |
 | `GET` | `/v1/observations` | Demanda paginada y filtrable | No |
-| `GET` | `/v1/context` | Clima y eventos paginados | No |
+| `GET` | `/v1/context` | Contexto histórico paginado | No |
 | `GET` | `/v1/downloads/{filename}` | CSV y manifiesto estáticos | No |
+| `GET` | `/v1/stream/observations` | Nuevos datos de competencia con cursor | Sí |
+| `GET` | `/v1/clock` | Estado y hora virtual autoritativa | Sí |
+| `GET` | `/v1/forecast-cycles/current` | Ciclo abierto y 48 targets exactos | Sí |
+| `GET` | `/v1/me` | Identidad de la API key | Sí + key |
+| `POST` | `/v1/submissions` | Envío atómico e idempotente | Sí + key |
+| `GET` | `/v1/submissions/{id}` | Recibo propio | Sí + key |
+| `GET` | `/v1/leaderboard` | Ranking acumulado o rolling 24 h | Sí |
 
 Respuesta esperada de salud:
 
@@ -110,9 +119,10 @@ Respuesta esperada de salud:
 {"status":"ok","service":"pulso-transmi-api"}
 ```
 
-Los endpoints de reloj, ciclos, submissions, leaderboard y baselines siguen
-planificados. Revisa el [contrato de API](docs/api-contract.md) antes de construir
-integraciones.
+El endpoint estático `/v1/observations` no cambia. Para el collector de
+competencia se usa `/v1/stream/observations`; así un proceso incremental nunca
+confunde el corte inicial con una liberación nueva. El payload, errores y reglas
+de reintento están en el [contrato de API](docs/api-contract.md).
 
 ## Inicio rápido local
 
@@ -138,7 +148,10 @@ No confirmes `.env` en Git. Las variables son:
 | `API_DB_PASSWORD` | Rol de mínimo privilegio usado por FastAPI |
 | `SCHEDULER_DB_PASSWORD` | Rol usado por el scheduler |
 | `APP_ENV` / `LOG_LEVEL` | Configuración de ejecución |
-| `SCHEDULER_POLL_SECONDS` | Intervalo del heartbeat |
+| `SCHEDULER_POLL_SECONDS` | Frecuencia con que se comprueba si corresponde un tick |
+| `RELEASE_INTERVAL_MINUTES` | Cadencia de publicación; valor oficial 30 |
+| `SUBMISSION_WINDOW_MINUTES` | Ventana de entrega; valor oficial 25 |
+| `SUBMISSION_MAX_ATTEMPTS` | Intentos válidos máximos por ciclo; valor oficial 3 |
 
 ### 2. Validar y levantar
 
@@ -162,8 +175,9 @@ curl --fail 'http://127.0.0.1:8010/v1/observations?limit=10'
 docker compose logs --tail=50 scheduler
 ```
 
-El scheduler está correcto en esta etapa si registra heartbeats con estado
-`idle`. No debe liberar observaciones ni avanzar el reloj en `0.1.0`.
+Sin escenario activo, el scheduler registra heartbeat y no modifica datos. Con
+un escenario en ejecución, cada tick queda en `ops.job_runs`; el heartbeat
+incluye el último resultado.
 
 ### 4. Detener sin perder datos
 
@@ -183,9 +197,9 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-La suite cubre salud, metadatos, filtros, paginación, descargas y controles de
-entrada. Las pruebas de integración de base de datos y los flujos de competencia
-forman parte del trabajo pendiente.
+La suite cubre salud, metadatos, filtros, paginación, descargas, API keys,
+validación estricta y hashes canónicos. Antes de activar el escenario se requiere
+además un ensayo integral con PostgreSQL y un participante de prueba.
 
 ## Operación en el VPS
 
@@ -209,10 +223,10 @@ GitHub repository
   ├── código de ingesta, features, entrenamiento e inferencia
   ├── modelo o artefacto versionado
   └── GitHub Actions
-          ├── descarga observaciones nuevas
+          ├── descarga observaciones nuevas usando cursor
           ├── decide si reentrena
-          ├── genera los cuatro horizontes
-          └── envía la submission autenticada
+          ├── consulta el ciclo y genera sus 48 targets
+          └── envía con API key e Idempotency-Key
 
 Supabase del equipo
   └── historial, métricas, estado del modelo y datos del dashboard
@@ -221,10 +235,10 @@ Vercel opcional
   └── demanda, drift, ejecuciones y leaderboard
 ```
 
-La autenticación, el payload exacto y las reglas de reintento se documentarán
-cuando el endpoint de submissions esté implementado. Nunca deben guardarse API
-keys directamente en el código: se usarán GitHub Actions Secrets y variables de
-entorno de Vercel/Supabase.
+Las API keys nunca se guardan en código, Supabase del estudiante ni variables
+públicas de Vercel. Para inferencia se usa GitHub Actions Secret
+`PULSO_API_KEY`. El dashboard consume el leaderboard público y sus propias
+métricas, no necesita la llave central.
 
 ## Estructura del repositorio
 
@@ -244,10 +258,10 @@ docker-compose.yml    stack central del VPS
 1. cargar y validar el catálogo geográfico de las 12 estaciones;
 2. implementar el generador reproducible y compilar el primer escenario;
 3. calibrar baselines y comprobar que el drift degrada modelos estáticos;
-4. implementar reloj, liberación de observaciones y ciclos;
-5. cerrar autenticación, submissions y scoring;
-6. publicar HTTPS detrás de Caddy;
-7. preparar el starter kit y ejecutar una prueba integral como estudiante.
+4. cargar el escenario congelado y crear participantes;
+5. ejecutar la prueba integral como estudiante;
+6. activar backup automático y ensayo de restauración;
+7. publicar el starter kit con workflow de GitHub Actions.
 
 El detalle, la evidencia y los criterios de salida se mantienen en
 [docs/progress.md](docs/progress.md).
@@ -258,7 +272,8 @@ El detalle, la evidencia y los criterios de salida se mantienen en
 - [Arquitectura](docs/architecture.md)
 - [Modelo de datos y métrica](docs/data-model.md)
 - [Generador de patrones y drift](docs/pattern-generator.md)
-- [Contrato inicial de API](docs/api-contract.md)
+- [Contrato de API](docs/api-contract.md)
+- [Cliente estudiantil y loop MLOps](docs/student-client.md)
 - [Runbook del VPS](docs/runbook.md)
 
 ## Repositorio y proyecto operativo

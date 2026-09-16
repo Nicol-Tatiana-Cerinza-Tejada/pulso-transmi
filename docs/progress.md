@@ -13,49 +13,47 @@ una funcionalidad disponible.
 ## Resumen del corte
 
 **Fecha:** 16 de septiembre de 2026  
-**Versión:** `0.1.0`  
-**Fase:** infraestructura base  
-**Estado global:** plataforma interna saludable; competencia aún no iniciada  
-**Repositorio:** `uexternadojz/pulso-transmi`  
+**Versión:** `0.3.0`
+**Fase:** protocolo de competencia implementado; activación pendiente
+**Estado global:** API pública saludable; escenario definitivo aún no iniciado
+**Repositorio:** `uexternadojz/pulso-transmi`
 **VPS:** `/opt/pulso-transmi`
 
 ## Entregado y verificado
 
 | Área | Resultado | Evidencia |
 |---|---|---|
-| Repositorio | Repo privado creado y rama `main` publicada | GitHub y commit `e440358` |
+| Repositorio | Repo público y rama `main` publicada | GitHub |
 | Contenedores | API, scheduler y PostgreSQL definidos con límites de recursos y logs | `docker-compose.yml` |
 | PostgreSQL | PostgreSQL 17, volumen persistente y healthcheck | `docker-compose.yml` |
 | Separación de datos | Esquemas `catalog`, `sim`, `competition` y `ops` | `database/init/01-schema.sql` |
-| Privilegios | Roles independientes para API y scheduler; futuro privado fuera del rol API | `database/init/02-grants.sql` |
+| Privilegios | API sin acceso a escenarios privados, parámetros ni ground truth | grants + migración `003` |
 | Integridad | Foreign keys compuestas, checks de predicción finita e índices operativos | migración `002` |
-| API | `/health`, `/ready` y `/v1/meta` | `app/main.py` |
-| Scheduler | Proceso persistente con heartbeat e identidad de instancia | `app/scheduler.py` |
+| API de datos | Dataset inicial, stream incremental, reloj y ciclos | `app/main.py` |
+| Submissions | API key con scrypt, schema estricto, idempotencia y recibos privados | `app/competition.py` |
+| Guardrails | 64 KB, JSON, rate limit, cutoff, targets exactos y 3 intentos | API, Caddy y BD |
+| Scheduler | Tick con advisory lock, liberación, ciclos, scoring y snapshots | `app/scheduler.py` |
+| Leaderboard | Ventanas cumulative y rolling 24 h | `score_snapshots` y API |
 | Despliegue | Stack levantado en el VPS; API enlazada únicamente a `127.0.0.1:8010` | verificación operativa del corte |
-| Pruebas | Prueba automática de liveness | `tests/test_health.py` |
+| Pruebas | API estática, contrato de submission, API keys y hashes | `tests/` |
 | Gestión | Proyecto creado en la vertical Academy del Supabase operativo | ID `1dde4b7d-7ab4-4df8-8298-34c25d662750` |
 
 ## Implementado parcialmente
 
 | Área | Disponible | Falta para cerrar |
 |---|---|---|
-| API | Infraestructura, pool y tres endpoints iniciales | rutas públicas de competencia y autenticación |
-| Scheduler | Heartbeat cada intervalo configurable | reloj virtual, locks, liberación, cierre y scoring |
-| Base de datos | Modelo completo inicial | datos semilla, pruebas integrales y rutina de migración automatizada |
+| API | Protocolo completo implementado | ensayo con participante y escenario activo |
+| Scheduler | Flujo completo implementado | prueba integral y observación bajo reloj activo |
+| Base de datos | Modelo, constraints y migración `003` | escenario definitivo y automatización de backup |
 | Escenarios | Contrato YAML de ejemplo | compilador, cifrado/gestión de semilla, generación y validación |
 | Métricas | Tablas y definición de WAPE/accuracy | cálculo transaccional, snapshots y pruebas de casos límite |
 | Observabilidad | Healthchecks y logs Docker rotados | métricas, alertas y dashboard operativo |
 
 ## No disponible todavía
 
-- catálogo cargado de estaciones y sus coordenadas;
-- serie histórica sintética;
+- catálogo y serie histórica están disponibles como dataset inicial, pero aún no
+  están materializados como escenario activo en PostgreSQL;
 - escenario activo o reloj virtual en ejecución;
-- endpoints de estaciones, observaciones y ciclos;
-- registro de participantes y entrega segura de API keys;
-- recepción y validación de submissions;
-- resolución de targets, scoring y leaderboard;
-- dominio público y TLS mediante Caddy;
 - backup diario externo al VPS;
 - starter kit para estudiantes;
 - pipeline de referencia en GitHub Actions;
@@ -66,8 +64,8 @@ una funcionalidad disponible.
 1. La plataforma central corre en Docker sobre el VPS y usa PostgreSQL propio.
 2. Cada estudiante puede usar GitHub Actions y Supabase en sus planes gratuitos.
 3. Vercel se reserva para el dashboard opcional y no es requisito del score.
-4. Las observaciones aparecen cada 15 minutos y cada ciclo exige cuatro
-   horizontes futuros.
+4. Los datos tienen granularidad de 15 minutos, se publican cada 30 minutos y
+   cada ciclo horario exige cuatro horizontes futuros.
 5. El ground truth completo se precalcula, pero permanece en `sim` y nunca se
    expone al rol de la API.
 6. Los cambios de régimen actúan sobre parámetros causales para exigir monitoreo
@@ -106,22 +104,23 @@ observable sin volver aleatorio el ranking.
 
 ### Hito 3 — Protocolo de competencia
 
-- [ ] implementar reloj y ticks idempotentes con advisory lock;
-- [ ] liberar observaciones y contexto sin filtrar futuro;
-- [ ] abrir y cerrar ciclos cada hora;
-- [ ] autenticar participantes con secretos almacenados como hash;
-- [ ] validar cutoff, cobertura, targets, valores finitos y duplicados;
-- [ ] resolver ciclos y generar snapshots cumulative y rolling 24h.
+- [x] implementar reloj y ticks idempotentes con advisory lock;
+- [x] liberar observaciones y contexto sin filtrar futuro;
+- [x] abrir y cerrar ciclos cada hora;
+- [x] autenticar participantes con secretos almacenados como hash;
+- [x] validar cutoff, targets, valores finitos, duplicados e idempotencia;
+- [x] resolver ciclos y generar snapshots cumulative y rolling 24h;
+- [ ] ejecutar una prueba integral con escenario y participante de ensayo.
 
 **Criterio de salida:** reintentos no duplican datos, una entrega tardía no entra
 al score y cada resultado puede reconstruirse desde registros inmutables.
 
 ### Hito 4 — Publicación y experiencia estudiantil
 
-- [ ] configurar dominio, Caddy y HTTPS;
-- [ ] aplicar rate limiting y límites de payload;
+- [x] configurar dominio, Caddy y HTTPS;
+- [x] aplicar rate limiting y límites de payload;
 - [ ] programar backup y probar restauración;
-- [ ] publicar OpenAPI y ejemplos válidos de requests/responses;
+- [x] publicar OpenAPI y ejemplos válidos de requests/responses;
 - [ ] crear starter kit con GitHub Actions y manejo de secrets;
 - [ ] ejecutar el flujo completo desde una cuenta de prueba.
 

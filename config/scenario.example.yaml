@@ -4,6 +4,9 @@ timezone: America/Bogota
 history_days: 45
 competition_days: 7
 interval_minutes: 15
+release_interval_minutes: 30
+forecast_cycle_minutes: 60
+submission_window_minutes: 25
 forecast_horizons: [1, 2, 3, 4]
 station_count: 12
 

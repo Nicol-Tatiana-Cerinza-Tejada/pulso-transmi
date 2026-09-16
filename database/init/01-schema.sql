@@ -275,8 +275,10 @@ create index public_events_scenario_time_idx
 
 create table competition.forecast_cycles (
     id bigint generated always as identity primary key,
+    public_id text not null unique,
     scenario_id bigint not null references sim.scenarios(id) on delete cascade,
     origin_at timestamptz not null,
+    data_cutoff timestamptz not null,
     opens_at timestamptz not null,
     closes_at timestamptz not null,
     target_start_at timestamptz not null,
@@ -309,13 +311,20 @@ create table competition.submissions (
     attempt_number smallint not null check (attempt_number > 0),
     received_at timestamptz not null default now(),
     data_cutoff timestamptz not null,
-    model_version text not null,
+    model_version text not null check (char_length(model_version) between 1 and 64),
     git_commit text,
     payload_hash text not null,
     status text not null check (status in ('accepted', 'rejected', 'superseded')),
     rejection_reason text,
+    schema_version text not null default '1.0' check (schema_version = '1.0'),
+    client_run_id text check (client_run_id is null or char_length(client_run_id) between 1 and 128),
+    idempotency_key text,
+    trained_at timestamptz,
+    training_data_end timestamptz,
+    request_id text,
     unique (participant_id, cycle_id, attempt_number),
     unique (participant_id, cycle_id, payload_hash),
+    unique (participant_id, idempotency_key),
     unique (id, participant_id, cycle_id)
 );
 
@@ -426,6 +435,11 @@ select distinct on (s.scenario_id, s.participant_id, s.window_type)
 from competition.score_snapshots s
 join competition.participants p on p.id = s.participant_id
 order by s.scenario_id, s.participant_id, s.window_type, s.calculated_at desc;
+
+create view competition.public_scenarios as
+select id, code, state, history_start, competition_start, competition_end
+from sim.scenarios
+where state in ('scheduled', 'running', 'frozen', 'revealed');
 
 create table ops.scheduler_heartbeats (
     instance_name text primary key,

@@ -19,6 +19,22 @@ Contiene reloj, participantes, datos liberados, ciclos, submissions,
 predicciones y resultados. Las entregas son inmutables; `cycle_entries` señala
 cuál intento es oficial antes del cierre.
 
+Relaciones principales:
+
+```text
+participants ─┬─ api_keys
+              └─ participant_scenarios ── scenarios
+
+forecast_cycles ─┬─ cycle_targets
+                 ├─ submissions ── predictions
+                 ├─ cycle_entries (puntero al intento oficial)
+                 └─ score_components ── score_snapshots
+```
+
+`submissions` conserva cada intento aceptado y su hash. Reemplazar una entrega
+solo cambia `cycle_entries.official_submission_id` y marca el intento anterior
+como `superseded`; no borra la evidencia original.
+
 ### `ops`
 
 Heartbeats, ejecuciones del scheduler y auditoría operacional.
@@ -53,7 +69,18 @@ WAPE = sum(abs(real - predicción)) / sum(real)
 Accuracy = 100 * max(0, 1 - WAPE)
 ```
 
-La accuracy oficial es el promedio de las accuracies por estación. Una
+La accuracy oficial es el promedio no ponderado de las accuracies por estación. Una
 predicción ausente se resuelve como predicción cero y queda marcada con
-`was_missing = true`. Para entrar al ranking se exigirá una cobertura mínima del
-95 %.
+`was_missing = true`. `coverage` es la fracción de targets con predicción y se
+publica junto al score. La política académica puede usar el umbral de 95 % para
+elegibilidad sin cambiar el cálculo reproducible.
+
+## Ventanas de leaderboard
+
+- `cumulative`: desde el inicio de competencia hasta el último tick resuelto.
+- `rolling_24h`: últimas 24 horas virtuales, útil para observar recuperación ante drift.
+- `current_cycle`: reservado en el esquema para diagnósticos posteriores.
+
+Los snapshots son append-only. La vista `leaderboard_latest` selecciona el más
+reciente por participante y ventana, lo que permite auditar la evolución sin
+recalcular el pasado para cada consulta.
