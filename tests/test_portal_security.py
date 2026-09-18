@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.portal import (
     PortalIdentity,
+    cohort_board,
     identity_hash,
     login,
     normalize_identity,
@@ -13,6 +14,37 @@ from app.portal import (
     rotate_api_key,
     session_hash,
 )
+
+
+def test_cohort_board_has_an_empty_timeline_before_first_cycle() -> None:
+    class Context:
+        def __init__(self, value=None):
+            self.value = value
+
+        async def __aenter__(self):
+            return self.value
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Connection:
+        async def fetchrow(self, _query, *_args):
+            return None
+
+    class Pool:
+        def acquire(self):
+            return Context(Connection())
+
+    identity = PortalIdentity(7, "stu_test", "Test", "QA", "A", "Test", "hash")
+    result = asyncio.run(cohort_board(Pool(), identity))
+
+    assert result == {
+        "mode": "integration",
+        "cycle": None,
+        "data": [],
+        "timeline": [],
+        "count": 0,
+    }
 
 
 def test_identity_normalization_accepts_accents_and_spacing() -> None:

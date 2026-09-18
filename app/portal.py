@@ -374,10 +374,17 @@ async def cohort_board(
             """
         )
         if cycle is None:
-            return {"mode": "integration", "cycle": None, "data": [], "count": 0}
+            return {
+                "mode": "integration",
+                "cycle": None,
+                "data": [],
+                "timeline": [],
+                "count": 0,
+            }
         rows = await connection.fetch(
             """
             select p.public_id as participant_id, p.display_name, p.section_code,
+                   (row_number() over (order by p.public_id) - 1)::integer as avatar_index,
                    exists(
                      select 1 from competition.api_keys k
                      where k.participant_id=p.id and k.revoked_at is null
@@ -411,6 +418,33 @@ async def cohort_board(
             cycle["scenario_id"],
             identity.cohort_code,
         )
+        timeline = await connection.fetch(
+            """
+            select participant_id, display_name, calculated_at, accuracy,
+                   coverage, rank
+            from (
+                select p.public_id as participant_id, p.display_name,
+                       ss.calculated_at, ss.accuracy, ss.coverage, ss.rank,
+                       row_number() over (
+                           partition by ss.participant_id
+                           order by ss.calculated_at desc
+                       ) as point_number
+                from competition.score_snapshots ss
+                join competition.participants p on p.id=ss.participant_id
+                join competition.participant_scenarios ps
+                  on ps.participant_id=p.id and ps.scenario_id=ss.scenario_id
+                where ss.scenario_id=$1
+                  and ss.window_type='cumulative'
+                  and ps.status='active'
+                  and p.kind='student'
+                  and p.cohort_code=$2
+            ) history
+            where point_number <= 96
+            order by calculated_at, participant_id
+            """,
+            cycle["scenario_id"],
+            identity.cohort_code,
+        )
     mode = "scored" if any(row["accuracy"] is not None for row in rows) else "integration"
     return {
         "mode": mode,
@@ -422,5 +456,6 @@ async def cohort_board(
             "expected_predictions": cycle["expected_predictions"],
         },
         "data": [dict(row) for row in rows],
+        "timeline": [dict(point) for point in timeline],
         "count": len(rows),
     }

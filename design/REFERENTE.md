@@ -1,10 +1,10 @@
-# Referente — Portal Pulso TransMi
-- **Fuente:** `docs/guides/pulso-transmi-guia-metodologica-v1.0.pdf` (portada aprobada del mismo proyecto).
-- **Por qué este:** la guía preliminar ya fue aprobada como identidad del proyecto y debe mantenerse consistente en la experiencia web.
-- **Dirección estética:** editorial académica con estructura utilitaria para datos.
-- **Tipografía:** display Saira Condensed / cuerpo IBM Plex Sans.
-- **Paleta:** fondo `#0D291D` · texto `#17231C` · acento `#C8A951` · borde `#CBD5CE`.
-- **Layout:** cabecera institucional oscura, círculos de movilidad como motivo y paneles blancos con grilla estricta.
-- **Qué se conserva:** verde profundo, acento oro, títulos grandes, etiquetas en mayúsculas, divisores finos y jerarquía sobria.
-- **Qué no se conserva:** formato paginado, bloques extensos de texto y cualquier dato estático que deba venir de la API.
-- **Accesibilidad:** fondo claro para formularios/tablas, foco visible y estados expresados con texto además de color.
+# Referente — Pulso TransMi Race Dashboard
+- **Fuente:** https://ui.shadcn.com/charts/area + https://www.formula1.com/en/results/2026/drivers
+- **Por qué este:** “elige el que mejor consideres; juguemos con colores y con el icono del avatar”.
+- **Dirección estética:** industrial / utilitario.
+- **Tipografía:** display Saira Condensed / body IBM Plex Sans.
+- **Paleta:** fondo `#F3F1E9` · tinta `#13251B` · verde `#1B5E3B` · oro `#C8A951` · borde `#CDD5CE`.
+- **Layout:** shell de producto con tres módulos; Home dominado por una pista temporal ancha y ranking compacto.
+- **Qué le robo:** ejes y tooltips sobrios de shadcn; jerarquía, numerales y tensión competitiva de F1; color individual solo en corredores.
+- **Qué NO le robo:** negro/rojo de F1, tablas densas como vista principal, cards repetitivas y cualquier score inventado durante warmup.
+- **Accesibilidad:** nombres y estados siempre en texto; avatar/color nunca son el único identificador; movimiento desactivable.

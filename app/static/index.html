@@ -7,7 +7,7 @@
     <title>Pulso TransMi · Portal MLOps</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/assets/styles.css">
-    <script src="/assets/app.js" defer></script>
+    <script src="/assets/app.js?v=20260918-avatar-map-2" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#contenido">Saltar al contenido</a>
@@ -62,110 +62,177 @@
       </section>
 
       <section id="dashboard-view" class="dashboard" aria-labelledby="dashboard-title" hidden>
-        <div class="dashboard-heading">
-          <div>
-            <p class="eyebrow dark">Panel individual</p>
-            <h1 id="dashboard-title">Tu operación MLOps</h1>
-            <p id="student-meta" class="muted"></p>
+        <aside class="dashboard-rail">
+          <div class="rail-brand" aria-label="Pulso TransMi">
+            <span class="rail-pulse" aria-hidden="true"></span>
+            <span>Pulso<br>TransMi</span>
           </div>
-          <div class="heading-actions">
-            <button id="refresh-button" class="button secondary" type="button">Actualizar</button>
-            <button id="logout-button" class="button quiet" type="button">Cerrar sesión</button>
+          <div class="rail-user">
+            <span id="current-avatar" class="avatar avatar-large" aria-hidden="true"></span>
+            <p id="student-meta"></p>
           </div>
-        </div>
-
-        <div id="global-message" class="message" role="status" aria-live="polite" hidden></div>
-
-        <div class="summary-grid">
-          <article class="card credential-card" aria-labelledby="credential-title">
-            <p class="card-index">01</p>
-            <h2 id="credential-title">Tu API key</h2>
-            <div id="key-empty">
-              <p>Genera la credencial que identificará tus scripts y GitHub Actions.</p>
-              <button id="generate-key-button" class="button primary" type="button">Generar mi API key</button>
-            </div>
-            <div id="key-active" hidden>
-              <span class="status success">Activa</span>
-              <dl class="facts">
-                <div><dt>Prefijo</dt><dd id="key-prefix"></dd></div>
-                <div><dt>Último uso</dt><dd id="key-last-used"></dd></div>
-              </dl>
-              <p class="muted small">El valor completo no puede recuperarse. Si lo perdiste, genera una nueva; la anterior dejará de funcionar.</p>
-              <button id="rotate-key-button" class="button danger-outline" type="button">Generar una nueva API key</button>
-            </div>
-          </article>
-
-          <article class="card cycle-card" aria-labelledby="cycle-title">
-            <p class="card-index">02</p>
-            <h2 id="cycle-title">Ronda actual</h2>
-            <div id="cycle-empty"><p>No hay una ronda abierta en este momento.</p></div>
-            <dl id="cycle-active" class="facts" hidden>
-              <div><dt>Ciclo</dt><dd id="cycle-id"></dd></div>
-              <div><dt>Corte de datos</dt><dd id="cycle-cutoff"></dd></div>
-              <div><dt>Predicciones</dt><dd id="cycle-count"></dd></div>
-              <div><dt>Cierra</dt><dd id="cycle-closes"></dd></div>
-            </dl>
-          </article>
-
-          <article class="card delivery-card" aria-labelledby="delivery-title">
-            <p class="card-index">03</p>
-            <h2 id="delivery-title">Última entrega</h2>
-            <div id="delivery-empty"><p>Aún no has enviado una predicción.</p></div>
-            <dl id="delivery-active" class="facts" hidden>
-              <div><dt>Estado</dt><dd id="delivery-status"></dd></div>
-              <div><dt>Modelo</dt><dd id="delivery-model"></dd></div>
-              <div><dt>Cobertura</dt><dd id="delivery-count"></dd></div>
-              <div><dt>Recibida</dt><dd id="delivery-time"></dd></div>
-            </dl>
-          </article>
-        </div>
-
-        <section id="secret-panel" class="secret-panel" aria-labelledby="secret-title" hidden>
-          <div>
-            <p class="eyebrow">Credencial recién generada</p>
-            <h2 id="secret-title">Cópiala ahora. Solo se mostrará una vez.</h2>
+          <nav class="module-nav" aria-label="Módulos del portal">
+            <button class="module-link is-active" type="button" data-module-target="home" aria-current="page">
+              <span class="nav-mark" aria-hidden="true"></span><span>Home</span>
+            </button>
+            <button class="module-link" type="button" data-module-target="api">
+              <span class="nav-mark" aria-hidden="true"></span><span>Mi API</span>
+            </button>
+            <button class="module-link" type="button" data-module-target="connection">
+              <span class="nav-mark" aria-hidden="true"></span><span>Conexión</span>
+            </button>
+          </nav>
+          <div class="rail-status">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span>Warmup activo</span>
           </div>
-          <code id="new-api-key"></code>
-          <div class="secret-actions">
-            <button id="copy-key-button" class="button gold" type="button">Copiar API key</button>
-            <button id="download-env-button" class="button dark-button" type="button">Descargar .env</button>
-          </div>
-        </section>
+        </aside>
 
-        <section class="quickstart" aria-labelledby="quickstart-title">
-          <div>
-            <p class="eyebrow dark">Prueba de conexión</p>
-            <h2 id="quickstart-title">De tu modelo al endpoint</h2>
-            <p>Guarda la llave en <code>PULSO_API_KEY</code> y ejecuta el ejemplo del repositorio.</p>
-          </div>
-          <pre><code>export PULSO_API_KEY="ptm_live_..."
-python examples/first_prediction.py</code></pre>
-        </section>
-
-        <section class="board-section" aria-labelledby="board-title">
-          <div class="section-heading">
+        <div class="dashboard-workspace">
+          <header class="workspace-header">
             <div>
-              <p class="eyebrow dark">Vista de la cohorte</p>
-              <h2 id="board-title">Estado de conexión</h2>
+              <p class="workspace-context">Proyecto 1 · MLOps · 2026-II</p>
+              <h1 id="dashboard-title">La carrera de modelos</h1>
             </div>
-            <p id="board-summary" class="muted"></p>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Estudiante</th>
-                  <th scope="col">Grupo</th>
-                  <th scope="col">API</th>
-                  <th scope="col">Entrega</th>
-                  <th scope="col">Predicciones</th>
-                  <th scope="col">Última actividad</th>
-                </tr>
-              </thead>
-              <tbody id="leaderboard-body"></tbody>
-            </table>
-          </div>
-        </section>
+            <div class="heading-actions">
+              <button id="refresh-button" class="button secondary" type="button">Actualizar datos</button>
+              <button id="logout-button" class="button quiet" type="button">Cerrar sesión</button>
+            </div>
+          </header>
+
+          <div id="global-message" class="message" role="status" aria-live="polite" hidden></div>
+
+          <section class="portal-module is-active" data-module="home" aria-labelledby="home-title" tabindex="-1">
+            <div class="phase-hero">
+              <div>
+                <span id="race-mode-label" class="phase-chip">Warmup</span>
+                <h2 id="home-title">Todos están en la línea de salida.</h2>
+                <p id="phase-copy">Conecta tu pipeline ahora. La carrera de accuracy aparecerá cuando se revele el primer resultado real.</p>
+              </div>
+              <div class="warmup-signal" aria-label="Estado actual: warmup">
+                <span>W</span><span>A</span><span>R</span><span>M</span><span>U</span><span>P</span>
+              </div>
+            </div>
+
+            <dl class="race-stats" aria-label="Resumen de la cohorte">
+              <div><dt>Corredores</dt><dd id="cohort-count">—</dd></div>
+              <div><dt>API activas</dt><dd id="connected-count">—</dd></div>
+              <div><dt>Entregas</dt><dd id="delivered-count">—</dd></div>
+              <div><dt>Periodo</dt><dd id="race-period">Warmup</dd></div>
+            </dl>
+
+            <section class="race-panel" aria-labelledby="race-title">
+              <div class="race-heading">
+                <div>
+                  <h3 id="race-title">Accuracy a través del tiempo</h3>
+                  <p>Una línea por estudiante. Pasa el cursor o usa el teclado para seguir un corredor.</p>
+                </div>
+                <div class="race-legend" aria-label="Leyenda">
+                  <span><i class="legend-line" aria-hidden="true"></i>Accuracy acumulada</span>
+                  <span><i class="legend-dot" aria-hidden="true"></i>Última posición</span>
+                </div>
+              </div>
+              <div class="race-layout">
+                <div class="chart-shell">
+                  <svg id="race-chart" class="race-chart" role="img" aria-labelledby="race-chart-title race-chart-desc" viewBox="0 0 960 520" preserveAspectRatio="xMidYMid meet">
+                    <title id="race-chart-title">Evolución de accuracy de la cohorte</title>
+                    <desc id="race-chart-desc">El eje vertical representa accuracy de cero a cien y el horizontal el tiempo.</desc>
+                  </svg>
+                  <div id="chart-empty" class="chart-empty" hidden>
+                    <span class="start-line" aria-hidden="true"></span>
+                    <strong>La pista está lista.</strong>
+                    <p>Sin resultados todavía: no mostramos scores inventados.</p>
+                  </div>
+                </div>
+                <ol id="race-list" class="race-list" aria-label="Clasificación actual"></ol>
+              </div>
+              <p id="preview-notice" class="preview-notice" hidden>Vista de propuesta con datos simulados. No representa resultados reales.</p>
+            </section>
+          </section>
+
+          <section class="portal-module" data-module="api" aria-labelledby="credential-title" tabindex="-1" hidden>
+            <div class="module-intro">
+              <h2 id="credential-title">Tu llave para entrar a pista.</h2>
+              <p>Esta credencial identifica tus scripts. El servidor guarda un hash; el secreto completo solo aparece al crearlo o rotarlo.</p>
+            </div>
+            <div class="api-layout">
+              <article class="credential-console">
+                <div id="key-empty">
+                  <span class="console-state">Sin credencial</span>
+                  <h3>Genera tu API key personal</h3>
+                  <p>La usarás como secret en GitHub Actions y como variable local.</p>
+                  <button id="generate-key-button" class="button primary" type="button">Generar mi API key</button>
+                </div>
+                <div id="key-active" hidden>
+                  <span class="console-state is-ready">Credencial activa</span>
+                  <dl class="facts">
+                    <div><dt>Prefijo seguro</dt><dd id="key-prefix"></dd></div>
+                    <div><dt>Último uso</dt><dd id="key-last-used"></dd></div>
+                  </dl>
+                  <p class="muted small">Si perdiste el secreto, genera uno nuevo. El anterior dejará de funcionar.</p>
+                  <button id="rotate-key-button" class="button danger-outline" type="button">Rotar credencial</button>
+                </div>
+              </article>
+              <ol class="api-steps">
+                <li><span>1</span><div><strong>Guárdala</strong><p>Nunca en código, notebooks, capturas o variables públicas.</p></div></li>
+                <li><span>2</span><div><strong>Conecta GitHub</strong><p>Crea el secret <code>PULSO_API_KEY</code> en tu repositorio.</p></div></li>
+                <li><span>3</span><div><strong>Valida identidad</strong><p>Ejecuta <code>GET /v1/me</code> antes de enviar.</p></div></li>
+              </ol>
+            </div>
+            <section id="secret-panel" class="secret-panel" aria-labelledby="secret-title" hidden>
+              <div><h3 id="secret-title">Cópiala ahora. Solo se mostrará una vez.</h3></div>
+              <code id="new-api-key"></code>
+              <div class="secret-actions">
+                <button id="copy-key-button" class="button gold" type="button">Copiar API key</button>
+                <button id="download-env-button" class="button dark-button" type="button">Descargar .env</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="portal-module" data-module="connection" aria-labelledby="connection-title" tabindex="-1" hidden>
+            <div class="module-intro">
+              <h2 id="connection-title">Del dato al recibo.</h2>
+              <p>Aquí verificas si cada pieza del pipeline llegó completa: ciclo, modelo, targets y entrega.</p>
+            </div>
+            <div class="pipeline-map" aria-label="Flujo de conexión">
+              <span>Datos</span><i aria-hidden="true"></i><span>Modelo</span><i aria-hidden="true"></i><span>48 predicciones</span><i aria-hidden="true"></i><span>API</span><i aria-hidden="true"></i><span>Score</span>
+            </div>
+            <div class="connection-grid">
+              <article class="connection-block" aria-labelledby="cycle-title">
+                <h3 id="cycle-title">Ronda actual</h3>
+                <div id="cycle-empty"><p>No hay una ronda abierta en este momento.</p></div>
+                <dl id="cycle-active" class="facts" hidden>
+                  <div><dt>Ciclo</dt><dd id="cycle-id"></dd></div>
+                  <div><dt>Corte de datos</dt><dd id="cycle-cutoff"></dd></div>
+                  <div><dt>Predicciones</dt><dd id="cycle-count"></dd></div>
+                  <div><dt>Cierra</dt><dd id="cycle-closes"></dd></div>
+                </dl>
+              </article>
+              <article class="connection-block" aria-labelledby="delivery-title">
+                <h3 id="delivery-title">Última entrega</h3>
+                <div id="delivery-empty"><p>Aún no has enviado una predicción.</p></div>
+                <dl id="delivery-active" class="facts" hidden>
+                  <div><dt>Estado</dt><dd id="delivery-status"></dd></div>
+                  <div><dt>Modelo</dt><dd id="delivery-model"></dd></div>
+                  <div><dt>Cobertura</dt><dd id="delivery-count"></dd></div>
+                  <div><dt>Recibida</dt><dd id="delivery-time"></dd></div>
+                </dl>
+              </article>
+            </div>
+            <section class="quickstart" aria-labelledby="quickstart-title">
+              <div><h3 id="quickstart-title">Prueba tu conexión</h3><p>Usa el cliente de referencia para recorrer el circuito completo.</p></div>
+              <pre><code>export PULSO_API_KEY="ptm_live_..."
+python examples/first_prediction.py</code></pre>
+            </section>
+            <section class="board-section" aria-labelledby="board-title">
+              <div class="section-heading"><h3 id="board-title">Estado operativo de la cohorte</h3><p id="board-summary" class="muted"></p></div>
+              <div class="table-wrap"><table>
+                <thead><tr><th scope="col">Estudiante</th><th scope="col">Grupo</th><th scope="col">API</th><th scope="col">Entrega</th><th scope="col">Predicciones</th><th scope="col">Última actividad</th></tr></thead>
+                <tbody id="leaderboard-body"></tbody>
+              </table></div>
+            </section>
+          </section>
+        </div>
       </section>
     </main>
 

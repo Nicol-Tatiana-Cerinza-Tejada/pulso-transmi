@@ -109,7 +109,12 @@ por estudiante en una hora, incluida la creación inicial.
 
 Requieren sesión. El primero entrega identidad, prefijo de credencial, ronda y
 recibos propios. El segundo muestra únicamente nombre, grupo, estado de
-activación, entrega y métricas de la cohorte; nunca correo ni documento.
+activación, entrega y métricas de la cohorte; nunca correo ni documento. Cada
+participante incluye un `avatar_index` estable dentro de la cohorte y la respuesta
+incluye `timeline`, con hasta 96 snapshots acumulados por participante
+(`calculated_at`, `accuracy`, `coverage` y `rank`). Antes del primer score,
+`timeline` es una lista vacía: el cliente debe presentar el estado de warmup sin
+fabricar resultados.
 
 ### `GET /v1/me`
 
