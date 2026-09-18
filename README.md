@@ -11,6 +11,10 @@ introduce nuevos patrones y drift.
 > de práctica sin activar todavía la generación dinámica. Todo está disponible
 > en `https://pulso-transmi.72-60-245-2.sslip.io`.
 
+El login valida únicamente correo institucional + documento. El nombre ingresado
+es una preferencia privada para el saludo; el leaderboard conserva el nombre
+oficial de matrícula.
+
 La matrícula activa ya está precargada: 32 estudiantes (20 del grupo A y 12 del
 grupo B). Cada persona debe activar su propia API key y realizar una entrega
 individual; el repositorio no contiene correos ni documentos del curso.
@@ -229,8 +233,9 @@ pytest -q
 ```
 
 La suite cubre salud, metadatos, filtros, paginación, descargas, API keys,
-validación estricta y hashes canónicos. Antes de activar el escenario se requiere
-además un ensayo integral con PostgreSQL y un participante de prueba.
+validación estricta, hashes canónicos y autenticación por correo + documento. La
+versión `0.4.1` fue además verificada públicamente con un nombre preferido distinto
+al oficial, sin alterar el nombre mostrado en el leaderboard.
 
 ## Operación en el VPS
 

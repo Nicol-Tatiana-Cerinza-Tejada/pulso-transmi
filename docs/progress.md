@@ -34,7 +34,7 @@ una funcionalidad disponible.
 | Privilegios | API sin acceso a escenarios privados, parámetros ni ground truth | grants + migración `003` |
 | Integridad | Foreign keys compuestas, checks de predicción finita e índices operativos | migración `002` |
 | API de datos | Dataset inicial, stream incremental, reloj y ciclos | `app/main.py` |
-| Portal estudiantil | Login por identidad académica, sesión temporal y emisión única de API key | `app/portal.py` + migración `004` |
+| Portal estudiantil | Login por correo + documento, nombre preferido de sesión y emisión única de API key | `app/portal.py` + migraciones `004` y `005` |
 | Matrícula | 32 estudiantes activos cargados sin almacenar documento o correo en claro | verificación operativa: grupo A 20, grupo B 12 |
 | Ronda de práctica | Ciclo abierto con 12 targets, uno por estación, sin activar el reloj sintético | `database/operations/bootstrap-practice.sql` |
 | Submissions | API key con scrypt, schema estricto, idempotencia y recibos privados | `app/competition.py` |
@@ -42,7 +42,7 @@ una funcionalidad disponible.
 | Scheduler | Tick con advisory lock, liberación, ciclos, scoring y snapshots | `app/scheduler.py` |
 | Leaderboard | Ventanas cumulative y rolling 24 h | `score_snapshots` y API |
 | Despliegue | Stack levantado en el VPS; API enlazada únicamente a `127.0.0.1:8010` | verificación operativa del corte |
-| Pruebas | 15 pruebas automatizadas y ensayo público como estudiante con entrega aceptada 12/12 | `tests/` + verificación del corte |
+| Pruebas | 17 pruebas automatizadas, login con nombre distinto y entrega pública aceptada 12/12 | `tests/` + verificación del corte |
 | Gestión | Proyecto creado en la vertical Academy del Supabase operativo | ID `1dde4b7d-7ab4-4df8-8298-34c25d662750` |
 
 ## Implementado parcialmente
@@ -51,7 +51,7 @@ una funcionalidad disponible.
 |---|---|---|
 | API | Protocolo y ensayo externo de práctica completos | ensayo con el escenario dinámico oficial |
 | Scheduler | Flujo completo implementado | prueba integral y observación bajo reloj activo |
-| Base de datos | Modelo, constraints y migración `003` | escenario definitivo y automatización de backup |
+| Base de datos | Modelo, constraints y migraciones `002` a `005` | escenario definitivo y automatización de backup |
 | Escenarios | Contrato YAML de ejemplo | compilador, cifrado/gestión de semilla, generación y validación |
 | Métricas | Tablas y definición de WAPE/accuracy | cálculo transaccional, snapshots y pruebas de casos límite |
 | Observabilidad | Healthchecks y logs Docker rotados | métricas, alertas y dashboard operativo |
@@ -81,6 +81,8 @@ una funcionalidad disponible.
    mínima prevista del 95 %.
 8. La competencia no se activa hasta completar calibración, seguridad, backup y
    una prueba integral externa.
+9. El login usa correo institucional + documento como guardrail. El nombre
+   preferido solo personaliza la sesión; el leaderboard usa el nombre oficial.
 
 ## Plan de ejecución
 

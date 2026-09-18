@@ -10,8 +10,9 @@ La API publica únicamente `127.0.0.1:8010`. PostgreSQL no publica puertos.
 
 La configuración activa de Caddy está versionada en
 `deploy/caddy/pulso-transmi.caddy` e instalada como
-`/etc/caddy/pulso-transmi.caddy`. Externamente solo expone `/health`, `/docs`,
-`/openapi.json` y `/v1/*`; `/ready` permanece interno.
+`/etc/caddy/pulso-transmi.caddy`. Externamente solo expone `/`, `/assets/*`,
+`/health`, `/ready`, `/docs`, `/openapi.json` y `/v1/*`; cualquier otra ruta
+recibe `404`.
 
 ## Despliegue
 
@@ -68,6 +69,10 @@ sudo docker compose exec -T postgres psql \
 sudo docker compose exec -T postgres psql \
   -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
   < database/migrations/004_student_portal.sql
+
+sudo docker compose exec -T postgres psql \
+  -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  < database/migrations/005_email_document_login.sql
 ```
 
 Comprobar después `ops.schema_migrations`. La migración `003` agrega trazabilidad
