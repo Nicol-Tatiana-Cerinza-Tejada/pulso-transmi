@@ -1,7 +1,7 @@
 ---
 title: Progreso de Pulso TransMi
 description: Estado verificable, decisiones vigentes, pendientes y criterios de salida del proyecto.
-updated_at: 2026-09-16
+updated_at: 2026-09-18
 ---
 
 # Progreso del proyecto
@@ -12,10 +12,14 @@ una funcionalidad disponible.
 
 ## Resumen del corte
 
-**Fecha:** 16 de septiembre de 2026  
-**Versión:** `0.3.0`
-**Fase:** protocolo de competencia implementado; activación pendiente
-**Estado global:** API pública saludable; escenario definitivo aún no iniciado
+**Fecha:** 18 de septiembre de 2026
+
+**Versión:** `0.4.0`
+
+**Fase:** portal estudiantil y ronda de integración operativos
+
+**Estado global:** primera predicción habilitada; escenario dinámico aún no iniciado
+
 **Repositorio:** `uexternadojz/pulso-transmi`
 **VPS:** `/opt/pulso-transmi`
 
@@ -30,19 +34,22 @@ una funcionalidad disponible.
 | Privilegios | API sin acceso a escenarios privados, parámetros ni ground truth | grants + migración `003` |
 | Integridad | Foreign keys compuestas, checks de predicción finita e índices operativos | migración `002` |
 | API de datos | Dataset inicial, stream incremental, reloj y ciclos | `app/main.py` |
+| Portal estudiantil | Login por identidad académica, sesión temporal y emisión única de API key | `app/portal.py` + migración `004` |
+| Matrícula | 32 estudiantes activos cargados sin almacenar documento o correo en claro | verificación operativa: grupo A 20, grupo B 12 |
+| Ronda de práctica | Ciclo abierto con 12 targets, uno por estación, sin activar el reloj sintético | `database/operations/bootstrap-practice.sql` |
 | Submissions | API key con scrypt, schema estricto, idempotencia y recibos privados | `app/competition.py` |
 | Guardrails | 64 KB, JSON, rate limit, cutoff, targets exactos y 3 intentos | API, Caddy y BD |
 | Scheduler | Tick con advisory lock, liberación, ciclos, scoring y snapshots | `app/scheduler.py` |
 | Leaderboard | Ventanas cumulative y rolling 24 h | `score_snapshots` y API |
 | Despliegue | Stack levantado en el VPS; API enlazada únicamente a `127.0.0.1:8010` | verificación operativa del corte |
-| Pruebas | API estática, contrato de submission, API keys y hashes | `tests/` |
+| Pruebas | 15 pruebas automatizadas y ensayo público como estudiante con entrega aceptada 12/12 | `tests/` + verificación del corte |
 | Gestión | Proyecto creado en la vertical Academy del Supabase operativo | ID `1dde4b7d-7ab4-4df8-8298-34c25d662750` |
 
 ## Implementado parcialmente
 
 | Área | Disponible | Falta para cerrar |
 |---|---|---|
-| API | Protocolo completo implementado | ensayo con participante y escenario activo |
+| API | Protocolo y ensayo externo de práctica completos | ensayo con el escenario dinámico oficial |
 | Scheduler | Flujo completo implementado | prueba integral y observación bajo reloj activo |
 | Base de datos | Modelo, constraints y migración `003` | escenario definitivo y automatización de backup |
 | Escenarios | Contrato YAML de ejemplo | compilador, cifrado/gestión de semilla, generación y validación |
@@ -51,13 +58,13 @@ una funcionalidad disponible.
 
 ## No disponible todavía
 
-- catálogo y serie histórica están disponibles como dataset inicial, pero aún no
-  están materializados como escenario activo en PostgreSQL;
+- catálogo y serie histórica están disponibles como dataset inicial; la ronda de
+  práctica está materializada, pero el escenario dinámico aún no está activo;
 - escenario activo o reloj virtual en ejecución;
 - backup diario externo al VPS;
-- starter kit para estudiantes;
+- starter kit automatizado con GitHub Actions; el baseline manual ya está publicado;
 - pipeline de referencia en GitHub Actions;
-- prueba end-to-end desde un repositorio estudiantil.
+- prueba end-to-end de todos los estudiantes; la prueba pública controlada ya pasó.
 
 ## Decisiones vigentes
 
@@ -110,7 +117,8 @@ observable sin volver aleatorio el ranking.
 - [x] autenticar participantes con secretos almacenados como hash;
 - [x] validar cutoff, targets, valores finitos, duplicados e idempotencia;
 - [x] resolver ciclos y generar snapshots cumulative y rolling 24h;
-- [ ] ejecutar una prueba integral con escenario y participante de ensayo.
+- [x] ejecutar una prueba integral con ronda de práctica y participante de ensayo.
+- [ ] repetir la prueba integral con el escenario dinámico oficial.
 
 **Criterio de salida:** reintentos no duplican datos, una entrega tardía no entra
 al score y cada resultado puede reconstruirse desde registros inmutables.
@@ -122,7 +130,7 @@ al score y cada resultado puede reconstruirse desde registros inmutables.
 - [ ] programar backup y probar restauración;
 - [x] publicar OpenAPI y ejemplos válidos de requests/responses;
 - [ ] crear starter kit con GitHub Actions y manejo de secrets;
-- [ ] ejecutar el flujo completo desde una cuenta de prueba.
+- [x] ejecutar el flujo completo desde una identidad de prueba y retirar su acceso.
 
 **Criterio de salida:** un estudiante nuevo puede descargar datos, entrenar y
 enviar una predicción siguiendo solo documentación pública.

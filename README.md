@@ -11,6 +11,10 @@ introduce nuevos patrones y drift.
 > de práctica sin activar todavía la generación dinámica. Todo está disponible
 > en `https://pulso-transmi.72-60-245-2.sslip.io`.
 
+La matrícula activa ya está precargada: 32 estudiantes (20 del grupo A y 12 del
+grupo B). Cada persona debe activar su propia API key y realizar una entrega
+individual; el repositorio no contiene correos ni documentos del curso.
+
 ## Qué se aprende
 
 El objetivo no es obtener una buena predicción una sola vez. Cada estudiante debe

@@ -13,7 +13,7 @@ pulso-transmi.72-60-245-2.sslip.io {
 		reverse_proxy 127.0.0.1:8010
 	}
 
-	@public path / /assets/* /health /docs /docs/* /openapi.json /v1/*
+	@public path / /assets/* /health /ready /docs /docs/* /openapi.json /v1/*
 	handle @public {
 		reverse_proxy 127.0.0.1:8010
 	}

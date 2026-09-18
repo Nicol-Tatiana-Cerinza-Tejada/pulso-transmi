@@ -138,6 +138,7 @@ Smoke test sin secretos:
 
 ```bash
 curl --fail https://pulso-transmi.72-60-245-2.sslip.io/health
+curl --fail https://pulso-transmi.72-60-245-2.sslip.io/ready
 curl --fail https://pulso-transmi.72-60-245-2.sslip.io/
 curl --fail https://pulso-transmi.72-60-245-2.sslip.io/v1/clock
 curl -i https://pulso-transmi.72-60-245-2.sslip.io/v1/me  # debe ser 401
