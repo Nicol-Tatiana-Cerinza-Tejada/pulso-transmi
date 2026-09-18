@@ -64,10 +64,36 @@ existente, aplicar cada migración pendiente explícitamente:
 sudo docker compose exec -T postgres psql \
   -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
   < database/migrations/003_submission_protocol.sql
+
+sudo docker compose exec -T postgres psql \
+  -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  < database/migrations/004_student_portal.sql
 ```
 
 Comprobar después `ops.schema_migrations`. La migración `003` agrega trazabilidad
-e idempotencia y revoca al rol API cualquier lectura de configuración privada.
+e idempotencia; la `004` agrega identidad firmada y sesiones del portal.
+
+## Ronda de práctica e importación de matrícula
+
+La ronda inicial no arranca el reloj ni materializa futuro sintético:
+
+```bash
+sudo docker compose exec -T postgres sh -lc \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < database/operations/bootstrap-practice.sql
+```
+
+Configurar antes `PORTAL_IDENTITY_PEPPER` como secreto largo. La matrícula se
+envía por stdin al comando administrativo y nunca se escribe en el repositorio:
+
+```bash
+sudo docker compose exec -T scheduler python -m app.admin import-roster \
+  --scenario practice-20260918 --cohort VIS2-2026II < roster-private.json
+```
+
+El JSON contiene objetos con `name`, `email`, `student_code` y `section`. El
+archivo temporal debe permanecer fuera de Git y eliminarse al terminar. Verificar
+conteos, no imprimir firmas ni documentos.
 
 ## Participantes y API keys
 
@@ -82,7 +108,13 @@ sudo docker compose exec scheduler python -m app.admin create-participant \
 La llave completa se muestra una sola vez. Entregarla por un canal privado; no
 guardarla en logs, hojas públicas, issues ni commits. El estudiante la almacena
 como GitHub Actions Secret `PULSO_API_KEY`. Para revocar, establecer
-`competition.api_keys.revoked_at` y registrar la intervención.
+`competition.api_keys.revoked_at` y registrar la intervención. El comando
+controlado permite revocar por ID público y habilita una nueva emisión en portal:
+
+```bash
+sudo docker compose exec scheduler python -m app.admin revoke-api-key \
+  --participant-id stu_...
+```
 
 ## Activar un escenario
 
@@ -106,10 +138,15 @@ Smoke test sin secretos:
 
 ```bash
 curl --fail https://pulso-transmi.72-60-245-2.sslip.io/health
+curl --fail https://pulso-transmi.72-60-245-2.sslip.io/
 curl --fail https://pulso-transmi.72-60-245-2.sslip.io/v1/clock
-curl --fail 'https://pulso-transmi.72-60-245-2.sslip.io/v1/leaderboard?window=cumulative'
 curl -i https://pulso-transmi.72-60-245-2.sslip.io/v1/me  # debe ser 401
+curl -i https://pulso-transmi.72-60-245-2.sslip.io/v1/portal/dashboard  # debe ser 401
+curl -i 'https://pulso-transmi.72-60-245-2.sslip.io/v1/leaderboard?window=cumulative'  # debe ser 401
 ```
+
+El leaderboard JSON ahora requiere API key; sin ella debe responder `401`. El
+portal raíz debe responder `200` y `/v1/portal/dashboard` sin cookie, `401`.
 
 ## Incidentes de submission
 

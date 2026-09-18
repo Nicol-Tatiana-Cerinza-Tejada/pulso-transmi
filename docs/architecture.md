@@ -12,9 +12,11 @@ permiso de lectura sobre el ground truth, las semillas ni la definición del dri
 1. **PostgreSQL:** fuente de verdad, datos generados, predicciones y scoring.
 2. **API:** dataset inicial, stream incremental, ciclos, autenticación,
    submissions y leaderboard.
-3. **Scheduler:** avanza el reloj cada 30 minutos, libera dos observaciones de
+3. **Portal:** sesión académica, emisión de API key, recibos y estado de la
+   cohorte; se sirve desde el mismo proceso para evitar otro servicio en el VPS.
+4. **Scheduler:** avanza el reloj cada 30 minutos, libera dos observaciones de
    15 minutos por estación, abre ciclos horarios, resuelve targets y toma snapshots.
-4. **Caddy:** TLS, superficie pública y límite de 64 KB para submissions.
+5. **Caddy:** TLS, superficie pública y límite de 64 KB para submissions.
 
 ## Flujo operativo
 
@@ -62,6 +64,22 @@ JSON estricto ─► ciclo abierto ─► target set exacto ─► transacción 
 
 La llave de idempotencia hace seguros los reintentos de GitHub Actions. Un mismo
 contenido no se duplica; una llave reutilizada con contenido diferente se rechaza.
+
+## Activación de credenciales
+
+```text
+nombre + correo + documento
+        │ HTTPS
+        ▼
+normalización ─► HMAC con pepper ─► participante
+                                      │
+                                      ├─ sesión web temporal (cookie HttpOnly)
+                                      └─ API key mostrada una vez (hash scrypt)
+```
+
+El roster y el pepper no se versionan. El VPS conserva firmas HMAC, no el
+documento legible. La sesión del navegador y la API key son credenciales
+distintas para que un script no dependa de cookies.
 
 ## Guardrails por capa
 

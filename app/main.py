@@ -2,16 +2,29 @@ from contextlib import asynccontextmanager
 from collections import defaultdict, deque
 import base64
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+from pathlib import Path
 import uuid
 
 import asyncpg
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.competition import ParticipantIdentity, authenticate, receipt, submit
 from app.contracts import SubmissionInput
+from app.portal import (
+    PortalIdentity,
+    authenticate_session,
+    cohort_board,
+    dashboard,
+    issue_api_key,
+    login as portal_login,
+    logout as portal_logout,
+)
 from app.settings import get_settings
 from app.starter_store import InvalidCursor, StarterStore
 
@@ -19,6 +32,11 @@ from app.starter_store import InvalidCursor, StarterStore
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    if (
+        settings.app_env != "development"
+        and settings.portal_identity_pepper == "development-only-change-me"
+    ):
+        raise RuntimeError("PORTAL_IDENTITY_PEPPER must be configured outside development")
     app.state.starter = StarterStore.load(settings.starter_data_dir)
     app.state.pool = None
     if not settings.skip_db_startup:
@@ -35,7 +53,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pulso TransMi API",
-    version="0.3.0",
+    version="0.4.0",
     description="API pública del reto MLOps Pulso TransMi.",
     lifespan=lifespan,
 )
@@ -48,12 +66,18 @@ app.add_middleware(
 )
 
 rate_windows: dict[int, deque[datetime]] = defaultdict(deque)
+portal_ip_windows: dict[str, deque[datetime]] = defaultdict(deque)
+portal_identity_windows: dict[str, deque[datetime]] = defaultdict(deque)
+STATIC_DIR = Path(__file__).with_name("static")
 
 
 @app.middleware("http")
 async def public_headers(request: Request, call_next):
     request.state.request_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex}"
-    if request.url.path == "/v1/submissions" and request.method == "POST":
+    if request.method == "POST" and (
+        request.url.path == "/v1/submissions"
+        or request.url.path.startswith("/v1/portal/")
+    ):
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             return JSONResponse(status_code=415, content={"error": {"code": "unsupported_media_type", "message": "Content-Type must be application/json", "request_id": request.state.request_id}})
@@ -70,10 +94,17 @@ async def public_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     if request.url.path in {"/v1/meta", "/v1/stations"} or request.url.path.startswith("/v1/downloads/"):
         response.headers["Cache-Control"] = "public, max-age=300"
-    elif request.url.path == "/v1/leaderboard":
-        response.headers["Cache-Control"] = "public, max-age=30"
+    elif request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=3600"
     elif request.url.path.startswith("/v1/"):
         response.headers["Cache-Control"] = "no-store"
+    elif request.url.path == "/":
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; style-src 'self'; script-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'self'"
+        )
     return response
 
 
@@ -87,6 +118,44 @@ async def participant(
     request: Request, authorization: str | None = Header(default=None)
 ) -> ParticipantIdentity:
     return await authenticate(pool(request), authorization)
+
+
+async def portal_participant(
+    request: Request, ptm_session: str | None = Cookie(default=None)
+) -> PortalIdentity:
+    return await authenticate_session(pool(request), ptm_session)
+
+
+class PortalLoginInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=2, max_length=160)
+    email: str = Field(min_length=6, max_length=254)
+    student_code: str = Field(min_length=5, max_length=32)
+
+
+def enforce_portal_login_rate(request: Request, email: str) -> None:
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    forwarded = request.headers.get("x-forwarded-for", "")
+    remote = forwarded.split(",", 1)[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    identity_key = hashlib.sha256(email.strip().lower().encode()).hexdigest()
+    windows = (
+        (portal_ip_windows[remote], timedelta(minutes=1), settings.portal_login_rate_limit_per_minute),
+        (portal_identity_windows[identity_key], timedelta(minutes=15), 6),
+    )
+    for window, duration, limit in windows:
+        cutoff = now - duration
+        while window and window[0] <= cutoff:
+            window.popleft()
+        if len(window) >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "rate_limited", "message": "Demasiados intentos. Espera antes de volver a intentar."},
+            )
+        window.append(now)
 
 
 def enforce_submission_rate(identity: ParticipantIdentity) -> None:
@@ -118,6 +187,11 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": "pulso-transmi-api"}
 
 
+@app.get("/", include_in_schema=False)
+async def portal_home() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
+
 @app.get("/ready", tags=["operations"])
 async def ready(request: Request) -> dict[str, object]:
     if request.app.state.pool is None:
@@ -142,6 +216,7 @@ async def meta(request: Request) -> dict[str, object]:
         "mode": "starter-and-competition-stream",
         "dataset": starter.metadata,
         "links": {
+            "portal": "/",
             "stations": "/v1/stations",
             "observations": "/v1/observations",
             "context": "/v1/context",
@@ -326,6 +401,71 @@ async def me(identity: ParticipantIdentity = Depends(participant)) -> dict[str, 
     return {"participant_id": identity.public_id, "display_name": identity.display_name, "kind": identity.kind}
 
 
+@app.post("/v1/portal/login", tags=["portal"])
+async def login_portal(payload: PortalLoginInput, request: Request, response: Response) -> dict[str, object]:
+    enforce_portal_login_rate(request, payload.email)
+    settings = get_settings()
+    identity, raw_token, expires_at = await portal_login(
+        pool(request),
+        name=payload.name,
+        email=payload.email,
+        student_code=payload.student_code,
+        pepper=settings.portal_identity_pepper,
+        session_hours=settings.portal_session_hours,
+    )
+    response.set_cookie(
+        "ptm_session",
+        raw_token,
+        max_age=settings.portal_session_hours * 3600,
+        expires=expires_at,
+        httponly=True,
+        secure=settings.app_env != "development",
+        samesite="strict",
+        path="/",
+    )
+    return {
+        "participant_id": identity.public_id,
+        "display_name": identity.display_name,
+        "expires_at": expires_at,
+    }
+
+
+@app.post("/v1/portal/logout", tags=["portal"], status_code=204)
+async def logout_portal(
+    request: Request,
+    response: Response,
+    identity: PortalIdentity = Depends(portal_participant),
+) -> Response:
+    await portal_logout(pool(request), identity)
+    response.delete_cookie("ptm_session", path="/")
+    response.status_code = 204
+    return response
+
+
+@app.get("/v1/portal/dashboard", tags=["portal"])
+async def portal_dashboard(
+    request: Request,
+    identity: PortalIdentity = Depends(portal_participant),
+) -> dict[str, object]:
+    return await dashboard(pool(request), identity)
+
+
+@app.post("/v1/portal/api-key", tags=["portal"], status_code=201)
+async def portal_api_key(
+    request: Request,
+    identity: PortalIdentity = Depends(portal_participant),
+) -> dict[str, object]:
+    return await issue_api_key(pool(request), identity)
+
+
+@app.get("/v1/portal/leaderboard", tags=["portal"])
+async def portal_leaderboard(
+    request: Request,
+    identity: PortalIdentity = Depends(portal_participant),
+) -> dict[str, object]:
+    return await cohort_board(pool(request), identity)
+
+
 @app.post("/v1/submissions", tags=["submissions"], status_code=201)
 async def create_submission(
     payload: SubmissionInput,
@@ -364,6 +504,7 @@ async def submission_receipt(
 async def leaderboard(
     request: Request,
     window: str = Query(default="cumulative", pattern="^(cumulative|rolling_24h)$"),
+    identity: ParticipantIdentity = Depends(participant),
 ) -> dict[str, object]:
     async with pool(request).acquire() as connection:
         rows = await connection.fetch(
@@ -377,3 +518,6 @@ async def leaderboard(
             window,
         )
     return {"window": window, "data": [dict(row) for row in rows], "count": len(rows)}
+
+
+app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="portal-assets")

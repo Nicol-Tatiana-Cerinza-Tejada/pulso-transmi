@@ -1,4 +1,4 @@
-# Contrato de API `0.3.0`
+# Contrato de API `0.4.0`
 
 Este documento es el contrato técnico de la plataforma central. Los clientes
 deben descubrir el ciclo vigente en la API y nunca inferirlo a partir de la hora
@@ -11,7 +11,7 @@ Base pública: `https://pulso-transmi.72-60-245-2.sslip.io`
 - Fechas y horas: ISO 8601 con zona horaria.
 - IDs de estación: texto de cinco dígitos; no convertir a entero.
 - Demanda: números finitos, no negativos y menores o iguales a `100000`.
-- Respuestas dinámicas: `Cache-Control: no-store`, salvo el leaderboard (30 s).
+- Respuestas dinámicas: `Cache-Control: no-store`.
 - Cada respuesta incluye `X-Request-ID`; debe guardarse al diagnosticar errores.
 - La API key va en `Authorization: Bearer $PULSO_API_KEY`, nunca en el JSON.
 
@@ -78,6 +78,28 @@ targets. Sin ciclo abierto devuelve `404 no_open_cycle`. Esta respuesta es la
 ```
 
 ## Identidad
+
+El portal usa una sesión web temporal. Los scripts y GitHub Actions usan una API
+key independiente. La identidad nunca se toma del JSON de una predicción.
+
+### `POST /v1/portal/login`
+
+Recibe `name`, `email` y `student_code`. Los tres datos se normalizan y comparan
+mediante firmas criptográficas con la matrícula importada. En éxito crea una
+cookie `HttpOnly`, `Secure` y `SameSite=Strict`; no devuelve la cédula ni sus
+firmas. Los errores son genéricos y los intentos están limitados.
+
+### `POST /v1/portal/api-key`
+
+Requiere sesión web. Emite una sola credencial activa por estudiante y muestra
+el secreto únicamente en la respuesta de creación. Si ya existe devuelve
+`409 api_key_already_issued` sin revelar el secreto anterior.
+
+### `GET /v1/portal/dashboard` y `GET /v1/portal/leaderboard`
+
+Requieren sesión. El primero entrega identidad, prefijo de credencial, ronda y
+recibos propios. El segundo muestra únicamente nombre, grupo, estado de
+activación, entrega y métricas de la cohorte; nunca correo ni documento.
 
 ### `GET /v1/me`
 
@@ -158,7 +180,7 @@ nunca permite consultar entregas de otro participante.
 
 ### `GET /v1/leaderboard?window=cumulative`
 
-`window` acepta `cumulative` o `rolling_24h`. Publica nombre, tipo,
+Requiere API key. `window` acepta `cumulative` o `rolling_24h`. Publica nombre, tipo,
 elegibilidad, accuracy, WAPE crudo, accuracy@20, cobertura, posición y fecha.
 No publica API keys, parámetros de modelos ni predicciones individuales.
 
@@ -177,6 +199,7 @@ como cero; la cobertura muestra la confiabilidad operacional.
 | 409 | `cycle_closed` | La ventana ya cerró |
 | 409 | `idempotency_conflict` | Misma llave, payload diferente |
 | 409 | `attempt_limit_reached` | Ya se consumieron tres intentos |
+| 409 | `api_key_already_issued` | La credencial personal ya fue generada |
 | 413 | `payload_too_large` | Body mayor a 64 KB |
 | 415 | `unsupported_media_type` | No se envió JSON |
 | 422 | `invalid_target_set` | Faltan targets, sobran o están repetidos |

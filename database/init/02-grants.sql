@@ -17,6 +17,9 @@ grant select on competition.scenario_clock,
     competition.public_scenarios
 to academy_api;
 grant select, update on competition.api_keys to academy_api;
+grant insert on competition.api_keys to academy_api;
+grant update (credential_claimed_at) on competition.participants to academy_api;
+grant select, insert, update on competition.portal_sessions to academy_api;
 grant select, insert, update on competition.submissions to academy_api;
 grant select, insert on competition.predictions to academy_api;
 grant select, insert, update on competition.cycle_entries to academy_api;

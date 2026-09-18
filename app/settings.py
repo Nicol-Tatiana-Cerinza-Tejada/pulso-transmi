@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     submission_rate_limit_per_minute: int = 10
     release_interval_minutes: int = 30
     submission_window_minutes: int = 25
+    portal_identity_pepper: str = "development-only-change-me"
+    portal_session_hours: int = 12
+    portal_login_rate_limit_per_minute: int = 120
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

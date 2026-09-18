@@ -3,7 +3,7 @@
 Este documento define el comportamiento mínimo de una solución estudiantil. No
 impone librería, algoritmo ni estructura de repositorio.
 
-## Estado que debe persistir cada equipo
+## Estado que debe persistir cada estudiante
 
 En Supabase:
 
@@ -52,7 +52,7 @@ La API key central no debe almacenarse en tablas, artifacts, logs, variables
 
 Entrenar y predecir pueden ser workflows diferentes. El entrenamiento produce un
 artefacto identificable y solo promueve un modelo que supera la validación
-temporal definida por el equipo. La inferencia consume el modelo promovido; no
+temporal definida por el estudiante. La inferencia consume el modelo promovido; no
 debe entrenar desde cero en cada ciclo salvo que esa sea una decisión medida y
 justificada.
 
@@ -68,7 +68,9 @@ El bono puede mostrar:
 - versión de modelo promovida y último entrenamiento;
 - error por estación y horizonte;
 - indicadores de drift y decisión de reentrenamiento;
-- cobertura, accuracy y posición desde el leaderboard público.
+- cobertura, accuracy y posición desde el leaderboard autenticado.
 
+La consulta desde Vercel debe ocurrir en una función de servidor con
+`PULSO_API_KEY`, nunca desde el navegador ni una variable `NEXT_PUBLIC_*`.
 El dashboard es observabilidad, no el lugar donde corre el entrenamiento ni la
 inferencia programada. Esas tareas permanecen en GitHub Actions.

@@ -6,15 +6,14 @@ consumen observaciones que aparecen con el tiempo, entrenan y reentrenan modelos
 envían pronósticos y compiten en un leaderboard que cambia cuando el sistema
 introduce nuevos patrones y drift.
 
-> **API pública — 16 de septiembre de 2026:** la versión `0.3.0` conserva el
-> dataset estático y añade el protocolo de competencia: stream incremental,
-> reloj, ciclos, API keys, submissions idempotentes, scoring y leaderboard en
-> `https://pulso-transmi.72-60-245-2.sslip.io`. El escenario permanece detenido
-> hasta cargar y validar el ground truth definitivo.
+> **Portal y API — 18 de septiembre de 2026:** la versión `0.4.0` añade acceso
+> estudiantil, emisión individual de API keys, tablero de conexión y una ronda
+> de práctica sin activar todavía la generación dinámica. Todo está disponible
+> en `https://pulso-transmi.72-60-245-2.sslip.io`.
 
 ## Qué se aprende
 
-El objetivo no es obtener una buena predicción una sola vez. Cada equipo debe
+El objetivo no es obtener una buena predicción una sola vez. Cada estudiante debe
 operar un pequeño sistema de ML capaz de:
 
 1. descargar datos incrementales desde una API;
@@ -46,8 +45,9 @@ reproducibles.
 - **Bono:** dashboard en Vercel para visualizar demanda, drift, salud del pipeline
   y posición en el leaderboard.
 
-El contrato definitivo de competencia se congelará antes de entregar API keys.
-Hasta entonces, los detalles marcados como *planificados* pueden cambiar.
+La prueba inicial usa 12 targets —uno por estación— y comprueba integración. Los
+ciclos oficiales posteriores usarán 48 targets y activarán el score cuando exista
+ground truth revelado.
 
 ## Dataset inicial
 
@@ -80,17 +80,39 @@ Redis, Celery ni un broker en esta versión.
 | Componente | Responsabilidad | Estado |
 |---|---|---|
 | PostgreSQL 17 | Catálogo, simulación privada, competencia y auditoría | Operativo |
-| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.3.0`) |
+| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.4.0`) |
+| Portal web | Acceso, API key, ronda, recibos y estado de la cohorte | Sesión estudiantil (`0.4.0`) |
 | Scheduler | Reloj, publicación, apertura, resolución, scoring y snapshots | Implementado; espera escenario |
 | Caddy | TLS y exposición pública del servicio | Operativo |
-| GitHub Actions | Pipeline gratuito de cada estudiante | Flujo metodológico publicado; starter técnico pendiente |
-| Supabase | Persistencia gratuita de cada solución estudiantil | A cargo de cada equipo |
+| GitHub Actions | Pipeline gratuito de cada estudiante | Ejemplo inicial publicado; automatización completa siguiente fase |
+| Supabase | Persistencia gratuita de cada solución estudiantil | A cargo de cada estudiante |
 | Vercel | Dashboard opcional | Bono |
 
 La arquitectura detallada está en [docs/architecture.md](docs/architecture.md) y
 el modelo relacional en [docs/data-model.md](docs/data-model.md).
 
-## API pública `0.3.0`
+## Primer acceso y predicción
+
+1. Abre el [portal de Pulso TransMi](https://pulso-transmi.72-60-245-2.sslip.io/).
+2. Ingresa con nombre completo, correo institucional y documento.
+3. Genera tu API key y guárdala: solo se muestra una vez.
+4. Clona este repositorio y ejecuta el baseline:
+
+```bash
+git clone https://github.com/uexternadojz/pulso-transmi.git
+cd pulso-transmi
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-student.txt
+export PULSO_API_KEY="ptm_live_..."
+python examples/first_prediction.py
+```
+
+El ejemplo descarga el histórico, entrena un Random Forest con variables
+temporales y rezagos, descubre los targets abiertos y envía la predicción. La
+guía completa está en [Primera predicción](docs/primera-prediccion.md).
+
+## API pública `0.4.0`
 
 La API pública está en `https://pulso-transmi.72-60-245-2.sslip.io`; Swagger se
 encuentra en `/docs`. En el VPS el proceso escucha únicamente en
@@ -107,11 +129,15 @@ encuentra en `/docs`. En el VPS el proceso escucha únicamente en
 | `GET` | `/v1/downloads/{filename}` | CSV y manifiesto estáticos | No |
 | `GET` | `/v1/stream/observations` | Nuevos datos de competencia con cursor | Sí |
 | `GET` | `/v1/clock` | Estado y hora virtual autoritativa | Sí |
-| `GET` | `/v1/forecast-cycles/current` | Ciclo abierto y 48 targets exactos | Sí |
+| `GET` | `/v1/forecast-cycles/current` | Ciclo abierto y targets exactos | Sí |
 | `GET` | `/v1/me` | Identidad de la API key | Sí + key |
 | `POST` | `/v1/submissions` | Envío atómico e idempotente | Sí + key |
 | `GET` | `/v1/submissions/{id}` | Recibo propio | Sí + key |
-| `GET` | `/v1/leaderboard` | Ranking acumulado o rolling 24 h | Sí |
+| `GET` | `/v1/leaderboard` | Ranking acumulado o rolling 24 h | Sí + key |
+| `POST` | `/v1/portal/login` | Sesión académica del portal | Sí |
+| `POST` | `/v1/portal/api-key` | Emisión única de credencial personal | Sí + sesión |
+| `GET` | `/v1/portal/dashboard` | Identidad, ronda y entregas propias | Sí + sesión |
+| `GET` | `/v1/portal/leaderboard` | Conexión o ranking de la cohorte | Sí + sesión |
 
 Respuesta esperada de salud:
 
@@ -215,7 +241,7 @@ issues, logs compartidos o documentación.
 
 ## Flujo previsto para estudiantes
 
-Cada equipo mantendrá su solución en un repositorio separado de esta plataforma
+Cada estudiante mantendrá su solución en un repositorio separado de esta plataforma
 central. La implementación gratuita objetivo es:
 
 ```text
@@ -225,10 +251,10 @@ GitHub repository
   └── GitHub Actions
           ├── descarga observaciones nuevas usando cursor
           ├── decide si reentrena
-          ├── consulta el ciclo y genera sus 48 targets
+          ├── consulta el ciclo y genera la cantidad de targets indicada
           └── envía con API key e Idempotency-Key
 
-Supabase del equipo
+Supabase del estudiante
   └── historial, métricas, estado del modelo y datos del dashboard
 
 Vercel opcional
@@ -237,8 +263,8 @@ Vercel opcional
 
 Las API keys nunca se guardan en código, Supabase del estudiante ni variables
 públicas de Vercel. Para inferencia se usa GitHub Actions Secret
-`PULSO_API_KEY`. El dashboard consume el leaderboard público y sus propias
-métricas, no necesita la llave central.
+`PULSO_API_KEY`. El dashboard propio consulta el leaderboard desde una función
+de servidor con la llave protegida; nunca desde una variable `NEXT_PUBLIC_*`.
 
 ## Estructura del repositorio
 
@@ -258,8 +284,8 @@ docker-compose.yml    stack central del VPS
 1. cargar y validar el catálogo geográfico de las 12 estaciones;
 2. implementar el generador reproducible y compilar el primer escenario;
 3. calibrar baselines y comprobar que el drift degrada modelos estáticos;
-4. cargar el escenario congelado y crear participantes;
-5. ejecutar la prueba integral como estudiante;
+4. completar la prueba de conexión de los 32 participantes;
+5. cargar y congelar el escenario oficial;
 6. activar backup automático y ensayo de restauración;
 7. publicar el starter kit con workflow de GitHub Actions.
 
@@ -276,6 +302,8 @@ El detalle, la evidencia y los criterios de salida se mantienen en
 - [Generador de patrones y drift](docs/pattern-generator.md)
 - [Contrato de API](docs/api-contract.md)
 - [Cliente estudiantil y loop MLOps](docs/student-client.md)
+- [Portal del estudiante](docs/portal-estudiante.md)
+- [Primera predicción](docs/primera-prediccion.md)
 - [Runbook del VPS](docs/runbook.md)
 
 ## Repositorio y proyecto operativo

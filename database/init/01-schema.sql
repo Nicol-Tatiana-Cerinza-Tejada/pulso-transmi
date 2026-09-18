@@ -198,8 +198,22 @@ create table competition.participants (
     display_name text not null check (btrim(display_name) <> ''),
     slug text not null unique,
     eligible boolean not null default true,
+    cohort_code text,
+    section_code text,
+    login_name_hash bytea,
+    login_email_hash bytea,
+    login_student_code_hash bytea,
+    credential_claimed_at timestamptz,
     created_at timestamptz not null default now()
 );
+
+create unique index participants_login_email_hash_key
+    on competition.participants (login_email_hash)
+    where login_email_hash is not null;
+
+create unique index participants_login_student_code_hash_key
+    on competition.participants (login_student_code_hash)
+    where login_student_code_hash is not null;
 
 create table competition.participant_scenarios (
     participant_id bigint not null references competition.participants(id) on delete cascade,
@@ -227,6 +241,20 @@ create index api_keys_participant_idx
 
 create index api_keys_active_participant_idx
     on competition.api_keys (participant_id)
+    where revoked_at is null;
+
+create table competition.portal_sessions (
+    token_hash text primary key,
+    participant_id bigint not null references competition.participants(id) on delete cascade,
+    created_at timestamptz not null default now(),
+    expires_at timestamptz not null,
+    last_seen_at timestamptz not null default now(),
+    revoked_at timestamptz,
+    check (created_at < expires_at)
+);
+
+create index portal_sessions_active_participant_idx
+    on competition.portal_sessions (participant_id, expires_at desc)
     where revoked_at is null;
 
 create table competition.observations (
