@@ -204,8 +204,13 @@ create table competition.participants (
     login_email_hash bytea,
     login_student_code_hash bytea,
     credential_claimed_at timestamptz,
+    avatar_index smallint check (avatar_index between 0 and 35),
     created_at timestamptz not null default now()
 );
+
+create unique index participants_cohort_avatar_key
+    on competition.participants (cohort_code, avatar_index)
+    where kind = 'student' and avatar_index is not null;
 
 create unique index participants_login_email_hash_key
     on competition.participants (login_email_hash)

@@ -13,6 +13,7 @@ grant select on competition.scenario_clock,
     competition.public_events,
     competition.forecast_cycles,
     competition.cycle_targets,
+    competition.score_snapshots,
     competition.leaderboard_latest,
     competition.public_scenarios
 to academy_api;

@@ -1,4 +1,4 @@
-# Contrato de API `0.4.2`
+# Contrato de API `0.5.0`
 
 Este documento es el contrato técnico de la plataforma central. Los clientes
 deben descubrir el ciclo vigente en la API y nunca inferirlo a partir de la hora
@@ -110,7 +110,7 @@ por estudiante en una hora, incluida la creación inicial.
 Requieren sesión. El primero entrega identidad, prefijo de credencial, ronda y
 recibos propios. El segundo muestra únicamente nombre, grupo, estado de
 activación, entrega y métricas de la cohorte; nunca correo ni documento. Cada
-participante incluye un `avatar_index` estable dentro de la cohorte y la respuesta
+participante incluye un `avatar_index` persistido y único dentro de la cohorte, y la respuesta
 incluye `timeline`, con hasta 96 snapshots acumulados por participante
 (`calculated_at`, `accuracy`, `coverage` y `rank`). Antes del primer score,
 `timeline` es una lista vacía: el cliente debe presentar el estado de warmup sin

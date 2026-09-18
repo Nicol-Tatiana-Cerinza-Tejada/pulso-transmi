@@ -73,12 +73,16 @@ sudo docker compose exec -T postgres psql \
 sudo docker compose exec -T postgres psql \
   -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
   < database/migrations/005_email_document_login.sql
+
+sudo docker compose exec -T postgres psql \
+  -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  < database/migrations/006_participant_avatars.sql
 ```
 
 Comprobar después `ops.schema_migrations`. La migración `003` agrega trazabilidad
 e idempotencia; la `004` agrega identidad firmada y sesiones del portal, y la
 `005` limita el login a correo + documento y guarda el nombre preferido únicamente
-en la sesión.
+en la sesión; `006` agrega la asignación validada y única de avatar por cohorte.
 
 ## Ronda de práctica e importación de matrícula
 
@@ -98,9 +102,21 @@ sudo docker compose exec -T scheduler python -m app.admin import-roster \
   --scenario practice-20260918 --cohort VIS2-2026II < roster-private.json
 ```
 
-El JSON contiene objetos con `name`, `email`, `student_code` y `section`. El
+El JSON contiene objetos con `name`, `email`, `student_code` y `section`; puede
+incluir `avatar_index` entre 0 y 35. Si se omite al reimportar, conserva la
+asignación existente. El
 archivo temporal debe permanecer fuera de Git y eliminarse al terminar. Verificar
 conteos, no imprimir firmas ni documentos.
+
+Para asignar o corregir avatares sin reimportar la matrícula, enviar por stdin una
+lista privada de objetos `participant_id` + `avatar_index`. El comando valida rango,
+cohorte, participantes, colisiones y unicidad antes de actualizar todo dentro de una
+sola transacción, y registra cada cambio en `ops.audit_events`:
+
+```bash
+sudo docker compose exec -T scheduler python -m app.admin assign-avatar-map \
+  --cohort VIS2-2026II < avatar-map-private.json
+```
 
 ## Participantes y API keys
 

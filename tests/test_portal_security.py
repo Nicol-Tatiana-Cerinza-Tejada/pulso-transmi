@@ -14,6 +14,29 @@ from app.portal import (
     rotate_api_key,
     session_hash,
 )
+from app.admin import validate_avatar_records
+
+
+def test_avatar_map_requires_unique_valid_assignments() -> None:
+    assert validate_avatar_records(
+        [
+            {"participant_id": "stu_" + "a" * 32, "avatar_index": 0},
+            {"participant_id": "stu_" + "b" * 32, "avatar_index": 35},
+        ]
+    ) == [("stu_" + "a" * 32, 0), ("stu_" + "b" * 32, 35)]
+
+    with pytest.raises(ValueError, match="unique within the cohort"):
+        validate_avatar_records(
+            [
+                {"participant_id": "stu_" + "a" * 32, "avatar_index": 7},
+                {"participant_id": "stu_" + "b" * 32, "avatar_index": 7},
+            ]
+        )
+
+    with pytest.raises(ValueError, match="between 0 and 35"):
+        validate_avatar_records(
+            [{"participant_id": "stu_" + "a" * 32, "avatar_index": 36}]
+        )
 
 
 def test_cohort_board_has_an_empty_timeline_before_first_cycle() -> None:

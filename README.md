@@ -6,7 +6,9 @@ consumen observaciones que aparecen con el tiempo, entrenan y reentrenan modelos
 envían pronósticos y compiten en un leaderboard que cambia cuando el sistema
 introduce nuevos patrones y drift.
 
-> **Portal y API — 18 de septiembre de 2026:** la versión `0.4.2` añade acceso
+> **Portal y API — 18 de septiembre de 2026:** la versión `0.5.0` añade el nuevo
+> dashboard de carrera, historial visual de accuracy y avatares persistidos por
+> cohorte. Conserva el acceso
 > estudiantil, emisión y rotación autoservicio de API keys, tablero de conexión
 > y una ronda de práctica sin activar todavía la generación dinámica. Todo está
 > disponible en `https://pulso-transmi.72-60-245-2.sslip.io`.
@@ -88,8 +90,8 @@ Redis, Celery ni un broker en esta versión.
 | Componente | Responsabilidad | Estado |
 |---|---|---|
 | PostgreSQL 17 | Catálogo, simulación privada, competencia y auditoría | Operativo |
-| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.4.2`) |
-| Portal web | Acceso, API key, rotación, recibos y estado de la cohorte | Sesión estudiantil (`0.4.2`) |
+| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.5.0`) |
+| Portal web | Carrera, API key, rotación, recibos y estado de la cohorte | Sesión estudiantil (`0.5.0`) |
 | Scheduler | Reloj, publicación, apertura, resolución, scoring y snapshots | Implementado; espera escenario |
 | Caddy | TLS y exposición pública del servicio | Operativo |
 | GitHub Actions | Pipeline gratuito de cada estudiante | Ejemplo inicial publicado; automatización completa siguiente fase |
@@ -122,7 +124,7 @@ El ejemplo descarga el histórico, entrena un Random Forest con variables
 temporales y rezagos, descubre los targets abiertos y envía la predicción. La
 guía completa está en [Primera predicción](docs/primera-prediccion.md).
 
-## API pública `0.4.2`
+## API pública `0.5.0`
 
 La API pública está en `https://pulso-transmi.72-60-245-2.sslip.io`; Swagger se
 encuentra en `/docs`. En el VPS el proceso escucha únicamente en

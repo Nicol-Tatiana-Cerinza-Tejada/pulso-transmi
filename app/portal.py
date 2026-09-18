@@ -384,7 +384,10 @@ async def cohort_board(
         rows = await connection.fetch(
             """
             select p.public_id as participant_id, p.display_name, p.section_code,
-                   (row_number() over (order by p.public_id) - 1)::integer as avatar_index,
+                   coalesce(
+                     p.avatar_index,
+                     ((row_number() over (order by p.public_id) - 1) % 36)::smallint
+                   ) as avatar_index,
                    exists(
                      select 1 from competition.api_keys k
                      where k.participant_id=p.id and k.revoked_at is null
