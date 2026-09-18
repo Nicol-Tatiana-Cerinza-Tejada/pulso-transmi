@@ -71,7 +71,6 @@ async def import_roster(scenario_code: str, cohort_code: str) -> None:
                 if not student_code or section not in {"A", "B"}:
                     raise SystemExit("Each student needs a student_code and section A or B")
 
-                name_digest = identity_hash(name, "name", settings.portal_identity_pepper)
                 email_digest = identity_hash(email, "email", settings.portal_identity_pepper)
                 code_digest = identity_hash(
                     student_code, "student_code", settings.portal_identity_pepper
@@ -81,15 +80,14 @@ async def import_roster(scenario_code: str, cohort_code: str) -> None:
                     """
                     insert into competition.participants (
                         public_id, display_name, slug, cohort_code, section_code,
-                        login_name_hash, login_email_hash, login_student_code_hash
+                        login_email_hash, login_student_code_hash
                     )
-                    values ($1,$2,$3,$4,$5,$6,$7,$8)
+                    values ($1,$2,$3,$4,$5,$6,$7)
                     on conflict (login_email_hash) where login_email_hash is not null
                     do update set
                         display_name=excluded.display_name,
                         cohort_code=excluded.cohort_code,
                         section_code=excluded.section_code,
-                        login_name_hash=excluded.login_name_hash,
                         login_student_code_hash=excluded.login_student_code_hash
                     returning id
                     """,
@@ -98,7 +96,6 @@ async def import_roster(scenario_code: str, cohort_code: str) -> None:
                     f"student-{stable_suffix}",
                     cohort_code,
                     section,
-                    name_digest,
                     email_digest,
                     code_digest,
                 )

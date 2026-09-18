@@ -7,11 +7,17 @@ recibos y el leaderboard. Está disponible en:
 
 ## Acceso
 
-Ingresa nombre completo, correo institucional y número de documento tal como
-aparecen en la lista oficial. La aplicación normaliza mayúsculas, espacios,
-tildes y puntuación del documento. La cédula viaja por HTTPS, no se registra en
-logs y se compara contra una firma criptográfica; el VPS no necesita conservarla
-en texto legible.
+Ingresa el correo institucional y el número de documento que aparecen en la
+lista oficial. Esos son los dos datos que verifican la identidad. La aplicación
+normaliza mayúsculas del correo y puntuación del documento.
+
+El campo de nombre es libre: puede contener el nombre preferido o la forma en que
+quieres que el portal te salude. No interviene en la autenticación y no cambia el
+nombre oficial que aparece en el tablero de la cohorte. Se conserva únicamente en
+la sesión temporal del navegador.
+
+La cédula viaja por HTTPS, no se registra en logs y se compara contra una firma
+criptográfica; el VPS no necesita conservarla en texto legible.
 
 Este acceso es una verificación académica simplificada para el reto. No es un
 mecanismo apropiado para notas oficiales ni información de mayor sensibilidad.

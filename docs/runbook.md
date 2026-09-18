@@ -71,7 +71,9 @@ sudo docker compose exec -T postgres psql \
 ```
 
 Comprobar después `ops.schema_migrations`. La migración `003` agrega trazabilidad
-e idempotencia; la `004` agrega identidad firmada y sesiones del portal.
+e idempotencia; la `004` agrega identidad firmada y sesiones del portal, y la
+`005` limita el login a correo + documento y guarda el nombre preferido únicamente
+en la sesión.
 
 ## Ronda de práctica e importación de matrícula
 

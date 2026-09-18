@@ -246,6 +246,9 @@ create index api_keys_active_participant_idx
 create table competition.portal_sessions (
     token_hash text primary key,
     participant_id bigint not null references competition.participants(id) on delete cascade,
+    preferred_name text check (
+        preferred_name is null or char_length(btrim(preferred_name)) between 1 and 160
+    ),
     created_at timestamptz not null default now(),
     expires_at timestamptz not null,
     last_seen_at timestamptz not null default now(),

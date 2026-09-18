@@ -51,7 +51,8 @@ function statusNode(label, kind) {
 
 function renderDashboard(data) {
   const participant = data.participant;
-  setText("#student-meta", `${participant.display_name} · Grupo ${participant.section || "—"} · ${participant.cohort || "MLOps"}`);
+  const preferredName = participant.preferred_name || participant.display_name;
+  setText("#student-meta", `Hola, ${preferredName} · Grupo ${participant.section || "—"} · ${participant.cohort || "MLOps"}`);
 
   const hasKey = Boolean(data.api_key);
   document.querySelector("#key-empty").hidden = hasKey;

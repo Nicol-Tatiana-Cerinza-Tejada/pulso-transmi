@@ -20,6 +20,7 @@ class PortalIdentity:
     display_name: str
     cohort_code: str | None
     section_code: str | None
+    preferred_name: str
     token_hash: str
 
 
@@ -29,8 +30,6 @@ def _plain(value: str) -> str:
 
 
 def normalize_identity(value: str, field: str) -> str:
-    if field == "name":
-        return " ".join(_plain(value).split())
     if field == "email":
         return value.strip().lower()
     if field == "student_code":
@@ -43,6 +42,11 @@ def identity_hash(value: str, field: str, pepper: str) -> bytes:
     return hmac.new(
         pepper.encode(), f"{field}:{normalized}".encode(), hashlib.sha256
     ).digest()
+
+
+def normalize_preferred_name(value: str) -> str:
+    """Keep a friendly name for presentation; never use it as identity proof."""
+    return " ".join(unicodedata.normalize("NFKC", value).strip().split())
 
 
 def session_hash(token: str) -> str:
@@ -58,7 +62,7 @@ async def login(
     pepper: str,
     session_hours: int,
 ) -> tuple[PortalIdentity, str, datetime]:
-    name_digest = identity_hash(name, "name", pepper)
+    preferred_name = normalize_preferred_name(name)
     email_digest = identity_hash(email, "email", pepper)
     code_digest = identity_hash(student_code, "student_code", pepper)
     raw_token = secrets.token_urlsafe(32)
@@ -71,11 +75,9 @@ async def login(
             select id, public_id, display_name, cohort_code, section_code
             from competition.participants
             where kind='student'
-              and login_name_hash=$1
-              and login_email_hash=$2
-              and login_student_code_hash=$3
+              and login_email_hash=$1
+              and login_student_code_hash=$2
             """,
-            name_digest,
             email_digest,
             code_digest,
         )
@@ -90,12 +92,13 @@ async def login(
         await connection.execute(
             """
             insert into competition.portal_sessions
-                (token_hash, participant_id, expires_at)
-            values ($1,$2,$3)
+                (token_hash, participant_id, expires_at, preferred_name)
+            values ($1,$2,$3,$4)
             """,
             token_digest,
             row["id"],
             expires_at,
+            preferred_name,
         )
     return (
         PortalIdentity(
@@ -104,6 +107,7 @@ async def login(
             display_name=row["display_name"],
             cohort_code=row["cohort_code"],
             section_code=row["section_code"],
+            preferred_name=preferred_name,
             token_hash=token_digest,
         ),
         raw_token,
@@ -123,7 +127,8 @@ async def authenticate_session(
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
             """
-            select p.id, p.public_id, p.display_name, p.cohort_code, p.section_code
+            select p.id, p.public_id, p.display_name, p.cohort_code, p.section_code,
+                   coalesce(s.preferred_name, p.display_name) as preferred_name
             from competition.portal_sessions s
             join competition.participants p on p.id=s.participant_id
             where s.token_hash=$1 and s.revoked_at is null and s.expires_at > now()
@@ -148,6 +153,7 @@ async def authenticate_session(
         display_name=row["display_name"],
         cohort_code=row["cohort_code"],
         section_code=row["section_code"],
+        preferred_name=row["preferred_name"],
         token_hash=token_digest,
     )
 
@@ -257,6 +263,7 @@ async def dashboard(pool: asyncpg.Pool, identity: PortalIdentity) -> dict[str, o
         "participant": {
             "participant_id": identity.public_id,
             "display_name": identity.display_name,
+            "preferred_name": identity.preferred_name,
             "cohort": identity.cohort_code,
             "section": identity.section_code,
         },

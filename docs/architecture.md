@@ -68,18 +68,18 @@ contenido no se duplica; una llave reutilizada con contenido diferente se rechaz
 ## Activación de credenciales
 
 ```text
-nombre + correo + documento
-        │ HTTPS
-        ▼
-normalización ─► HMAC con pepper ─► participante
-                                      │
-                                      ├─ sesión web temporal (cookie HttpOnly)
-                                      └─ API key mostrada una vez (hash scrypt)
+correo + documento ─► normalización ─► HMAC con pepper ─► participante
+                                                               │
+nombre preferido ───────────► sesión temporal                  │
+                                                               ├─ cookie HttpOnly
+                                                               └─ API key mostrada una vez
+                                                                  (hash scrypt)
 ```
 
-El roster y el pepper no se versionan. El VPS conserva firmas HMAC, no el
-documento legible. La sesión del navegador y la API key son credenciales
-distintas para que un script no dependa de cookies.
+El roster y el pepper no se versionan. El VPS conserva firmas HMAC del correo y
+el documento, no esos valores legibles. El nombre preferido solo vive en la sesión
+temporal y no modifica el nombre oficial de la matrícula. La sesión del navegador
+y la API key son credenciales distintas para que un script no dependa de cookies.
 
 ## Guardrails por capa
 

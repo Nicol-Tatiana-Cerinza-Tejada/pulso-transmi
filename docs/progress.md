@@ -14,7 +14,7 @@ una funcionalidad disponible.
 
 **Fecha:** 18 de septiembre de 2026
 
-**Versión:** `0.4.0`
+**Versión:** `0.4.1`
 
 **Fase:** portal estudiantil y ronda de integración operativos
 

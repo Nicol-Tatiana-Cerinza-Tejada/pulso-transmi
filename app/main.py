@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pulso TransMi API",
-    version="0.4.0",
+    version="0.4.1",
     description="API pública del reto MLOps Pulso TransMi.",
     lifespan=lifespan,
 )
@@ -129,7 +129,11 @@ async def portal_participant(
 class PortalLoginInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=2, max_length=160)
+    name: str = Field(
+        min_length=2,
+        max_length=160,
+        description="Nombre preferido para personalizar la sesión; no autentica.",
+    )
     email: str = Field(min_length=6, max_length=254)
     student_code: str = Field(min_length=5, max_length=32)
 
@@ -426,6 +430,7 @@ async def login_portal(payload: PortalLoginInput, request: Request, response: Re
     return {
         "participant_id": identity.public_id,
         "display_name": identity.display_name,
+        "preferred_name": identity.preferred_name,
         "expires_at": expires_at,
     }
 

@@ -6,7 +6,7 @@ consumen observaciones que aparecen con el tiempo, entrenan y reentrenan modelos
 envían pronósticos y compiten en un leaderboard que cambia cuando el sistema
 introduce nuevos patrones y drift.
 
-> **Portal y API — 18 de septiembre de 2026:** la versión `0.4.0` añade acceso
+> **Portal y API — 18 de septiembre de 2026:** la versión `0.4.1` añade acceso
 > estudiantil, emisión individual de API keys, tablero de conexión y una ronda
 > de práctica sin activar todavía la generación dinámica. Todo está disponible
 > en `https://pulso-transmi.72-60-245-2.sslip.io`.
@@ -84,8 +84,8 @@ Redis, Celery ni un broker en esta versión.
 | Componente | Responsabilidad | Estado |
 |---|---|---|
 | PostgreSQL 17 | Catálogo, simulación privada, competencia y auditoría | Operativo |
-| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.4.0`) |
-| Portal web | Acceso, API key, ronda, recibos y estado de la cohorte | Sesión estudiantil (`0.4.0`) |
+| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.4.1`) |
+| Portal web | Acceso, API key, ronda, recibos y estado de la cohorte | Sesión estudiantil (`0.4.1`) |
 | Scheduler | Reloj, publicación, apertura, resolución, scoring y snapshots | Implementado; espera escenario |
 | Caddy | TLS y exposición pública del servicio | Operativo |
 | GitHub Actions | Pipeline gratuito de cada estudiante | Ejemplo inicial publicado; automatización completa siguiente fase |
@@ -98,7 +98,8 @@ el modelo relacional en [docs/data-model.md](docs/data-model.md).
 ## Primer acceso y predicción
 
 1. Abre el [portal de Pulso TransMi](https://pulso-transmi.72-60-245-2.sslip.io/).
-2. Ingresa con nombre completo, correo institucional y documento.
+2. Ingresa con correo institucional y documento. El nombre es solo la forma en
+   que el portal te saludará y no tiene que coincidir con la lista.
 3. Genera tu API key y guárdala: solo se muestra una vez.
 4. Clona este repositorio y ejecuta el baseline:
 
@@ -116,7 +117,7 @@ El ejemplo descarga el histórico, entrena un Random Forest con variables
 temporales y rezagos, descubre los targets abiertos y envía la predicción. La
 guía completa está en [Primera predicción](docs/primera-prediccion.md).
 
-## API pública `0.4.0`
+## API pública `0.4.1`
 
 La API pública está en `https://pulso-transmi.72-60-245-2.sslip.io`; Swagger se
 encuentra en `/docs`. En el VPS el proceso escucha únicamente en
@@ -237,7 +238,7 @@ además un ensayo integral con PostgreSQL y un participante de prueba.
 - **API interna:** `127.0.0.1:8010`
 - **PostgreSQL:** sin puerto publicado al host
 - **URL pública:** `https://pulso-transmi.72-60-245-2.sslip.io`
-- **Exposición pública:** Caddy con HTTPS; `/ready` permanece solo en loopback
+- **Exposición pública:** Caddy con HTTPS y rutas explícitamente permitidas
 
 El procedimiento de despliegue, diagnóstico, backup y recuperación vive en el
 [runbook del VPS](docs/runbook.md). No copies `.env`, tokens ni contraseñas a

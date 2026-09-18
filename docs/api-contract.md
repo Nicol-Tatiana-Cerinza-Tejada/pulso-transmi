@@ -1,4 +1,4 @@
-# Contrato de API `0.4.0`
+# Contrato de API `0.4.1`
 
 Este documento es el contrato técnico de la plataforma central. Los clientes
 deben descubrir el ciclo vigente en la API y nunca inferirlo a partir de la hora
@@ -84,8 +84,10 @@ key independiente. La identidad nunca se toma del JSON de una predicción.
 
 ### `POST /v1/portal/login`
 
-Recibe `name`, `email` y `student_code`. Los tres datos se normalizan y comparan
-mediante firmas criptográficas con la matrícula importada. En éxito crea una
+Recibe `name`, `email` y `student_code`. Solo `email` y `student_code` se
+normalizan y comparan mediante firmas criptográficas con la matrícula importada.
+`name` es un nombre preferido de presentación: se conserva en la sesión temporal,
+no autentica y no reemplaza el nombre oficial del leaderboard. En éxito crea una
 cookie `HttpOnly`, `Secure` y `SameSite=Strict`; no devuelve la cédula ni sus
 firmas. Los errores son genéricos y los intentos están limitados.
 
