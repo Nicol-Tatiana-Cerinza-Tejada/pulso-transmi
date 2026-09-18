@@ -254,10 +254,10 @@ input::placeholder { color: #78877f; }
 .warmup-signal span:nth-child(6) { min-height: 6.8rem; background: #b86743; }
 
 .race-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 1rem; border: 1px solid var(--border); background: rgba(255,255,255,0.52); }
-.race-stats div { padding: 0.9rem 1rem; border-right: 1px solid var(--border); }
+.race-stats div { min-width: 0; padding: 0.9rem 1rem; border-right: 1px solid var(--border); }
 .race-stats div:last-child { border-right: 0; }
 .race-stats dt { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.race-stats dd { margin: 0.2rem 0 0; font-family: var(--font-display); font-size: 2.1rem; line-height: 1; }
+.race-stats dd { margin: 0.2rem 0 0; overflow-wrap: anywhere; font-family: var(--font-display); font-size: 2.1rem; line-height: 1; }
 .race-panel { background: var(--surface); border: 1px solid var(--border); box-shadow: 0 16px 45px rgba(13,41,29,0.07); }
 .race-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; padding: 1.3rem 1.5rem; border-bottom: 1px solid var(--border); }
 .race-heading h3, .module-intro h2, .connection-block h3, .quickstart h3, .section-heading h3, .credential-console h3 { margin: 0; font-family: var(--font-display); }

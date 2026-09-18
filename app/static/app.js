@@ -217,7 +217,10 @@ function renderRace(board) {
   list.replaceChildren();
   notice.hidden = !DEMO_MODE;
   setText("#race-mode-label", DEMO_MODE ? "Warmup · vista previa" : "Warmup");
-  setText("#race-period", DEMO_MODE ? "Simulado" : (board.cycle?.cycle_id || board.cycle?.public_id || "Warmup"));
+  setText(
+    "#race-period",
+    DEMO_MODE ? "Simulado" : (board.mode === "scored" ? "En curso" : "Warmup"),
+  );
 
   if (!timeline.length) {
     empty.hidden = false;
