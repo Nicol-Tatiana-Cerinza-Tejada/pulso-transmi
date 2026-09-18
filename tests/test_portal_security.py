@@ -1,10 +1,16 @@
 import asyncio
+from datetime import datetime, timezone
+
+import pytest
+from fastapi import HTTPException
 
 from app.portal import (
+    PortalIdentity,
     identity_hash,
     login,
     normalize_identity,
     normalize_preferred_name,
+    rotate_api_key,
     session_hash,
 )
 
@@ -90,3 +96,112 @@ def test_login_uses_email_and_document_not_name() -> None:
     assert connection.session_args[-1] == "Un apodo completamente distinto"
     assert identity.display_name == "Nombre oficial de matrícula"
     assert identity.preferred_name == "Un apodo completamente distinto"
+
+
+def test_rotation_revokes_previous_key_and_returns_a_new_secret_once() -> None:
+    class Context:
+        def __init__(self, value=None):
+            self.value = value
+
+        async def __aenter__(self):
+            return self.value
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Connection:
+        def __init__(self):
+            self.queries = []
+
+        def transaction(self):
+            return Context()
+
+        async def fetchrow(self, query, *_args):
+            self.queries.append(query)
+            return {"id": 11, "key_prefix": "ptm_live_previous"}
+
+        async def fetchval(self, query, *_args):
+            self.queries.append(query)
+            if "select count(*)" in query:
+                return 1
+            return datetime(2026, 9, 18, tzinfo=timezone.utc)
+
+        async def execute(self, query, *_args):
+            self.queries.append(query)
+
+    class Pool:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def acquire(self):
+            return Context(self.connection)
+
+    connection = Connection()
+    identity = PortalIdentity(7, "stu_test", "Test", "QA", "A", "Test", "hash")
+    result = asyncio.run(rotate_api_key(Pool(connection), identity, 4))
+
+    assert result["api_key"].startswith("ptm_live_")
+    assert result["key_prefix"] != "ptm_live_previous"
+    assert result["revoked_key_prefix"] == "ptm_live_previous"
+    assert result["shown_once"] is True
+    revoke_index = next(
+        index
+        for index, query in enumerate(connection.queries)
+        if "update competition.api_keys set revoked_at" in query
+    )
+    insert_index = next(
+        index
+        for index, query in enumerate(connection.queries)
+        if "insert into competition.api_keys" in query
+    )
+    assert revoke_index < insert_index
+    assert any("api_key.rotated" in query for query in connection.queries)
+
+
+def test_rotation_is_rate_limited_before_revoking_the_active_key() -> None:
+    class Context:
+        def __init__(self, value=None):
+            self.value = value
+
+        async def __aenter__(self):
+            return self.value
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Connection:
+        def __init__(self):
+            self.queries = []
+
+        def transaction(self):
+            return Context()
+
+        async def fetchrow(self, query, *_args):
+            self.queries.append(query)
+            return {"id": 11, "key_prefix": "ptm_live_previous"}
+
+        async def fetchval(self, query, *_args):
+            self.queries.append(query)
+            return 4
+
+        async def execute(self, query, *_args):
+            self.queries.append(query)
+
+    class Pool:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def acquire(self):
+            return Context(self.connection)
+
+    connection = Connection()
+    identity = PortalIdentity(7, "stu_test", "Test", "QA", "A", "Test", "hash")
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(rotate_api_key(Pool(connection), identity, 4))
+
+    assert raised.value.status_code == 429
+    assert raised.value.detail["code"] == "api_key_rotation_rate_limited"
+    assert not any(
+        "update competition.api_keys set revoked_at" in query
+        for query in connection.queries
+    )

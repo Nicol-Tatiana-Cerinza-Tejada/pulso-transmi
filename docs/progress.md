@@ -14,7 +14,7 @@ una funcionalidad disponible.
 
 **Fecha:** 18 de septiembre de 2026
 
-**Versión:** `0.4.1`
+**Versión:** `0.4.2`
 
 **Fase:** portal estudiantil y ronda de integración operativos
 
@@ -34,7 +34,7 @@ una funcionalidad disponible.
 | Privilegios | API sin acceso a escenarios privados, parámetros ni ground truth | grants + migración `003` |
 | Integridad | Foreign keys compuestas, checks de predicción finita e índices operativos | migración `002` |
 | API de datos | Dataset inicial, stream incremental, reloj y ciclos | `app/main.py` |
-| Portal estudiantil | Login por correo + documento, nombre preferido de sesión y emisión única de API key | `app/portal.py` + migraciones `004` y `005` |
+| Portal estudiantil | Login por correo + documento, nombre preferido y rotación autoservicio de API key | `app/portal.py` + migraciones `004` y `005` |
 | Matrícula | 32 estudiantes activos cargados sin almacenar documento o correo en claro | verificación operativa: grupo A 20, grupo B 12 |
 | Ronda de práctica | Ciclo abierto con 12 targets, uno por estación, sin activar el reloj sintético | `database/operations/bootstrap-practice.sql` |
 | Submissions | API key con scrypt, schema estricto, idempotencia y recibos privados | `app/competition.py` |
@@ -42,7 +42,7 @@ una funcionalidad disponible.
 | Scheduler | Tick con advisory lock, liberación, ciclos, scoring y snapshots | `app/scheduler.py` |
 | Leaderboard | Ventanas cumulative y rolling 24 h | `score_snapshots` y API |
 | Despliegue | Stack levantado en el VPS; API enlazada únicamente a `127.0.0.1:8010` | verificación operativa del corte |
-| Pruebas | 17 pruebas automatizadas, login con nombre distinto y entrega pública aceptada 12/12 | `tests/` + verificación del corte |
+| Pruebas | 19 pruebas automatizadas, rotación protegida y entrega pública aceptada 12/12 | `tests/` + verificación del corte |
 | Gestión | Proyecto creado en la vertical Academy del Supabase operativo | ID `1dde4b7d-7ab4-4df8-8298-34c25d662750` |
 
 ## Implementado parcialmente

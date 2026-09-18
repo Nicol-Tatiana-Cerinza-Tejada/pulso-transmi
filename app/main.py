@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import uuid
+from typing import Literal
 
 import asyncpg
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -24,6 +25,7 @@ from app.portal import (
     issue_api_key,
     login as portal_login,
     logout as portal_logout,
+    rotate_api_key,
 )
 from app.settings import get_settings
 from app.starter_store import InvalidCursor, StarterStore
@@ -53,7 +55,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Pulso TransMi API",
-    version="0.4.1",
+    version="0.4.2",
     description="API pública del reto MLOps Pulso TransMi.",
     lifespan=lifespan,
 )
@@ -136,6 +138,12 @@ class PortalLoginInput(BaseModel):
     )
     email: str = Field(min_length=6, max_length=254)
     student_code: str = Field(min_length=5, max_length=32)
+
+
+class PortalKeyRotationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm_revoke: Literal[True]
 
 
 def enforce_portal_login_rate(request: Request, email: str) -> None:
@@ -461,6 +469,20 @@ async def portal_api_key(
     identity: PortalIdentity = Depends(portal_participant),
 ) -> dict[str, object]:
     return await issue_api_key(pool(request), identity)
+
+
+@app.post("/v1/portal/api-key/rotate", tags=["portal"], status_code=201)
+async def portal_rotate_api_key(
+    payload: PortalKeyRotationInput,
+    request: Request,
+    identity: PortalIdentity = Depends(portal_participant),
+) -> dict[str, object]:
+    del payload
+    return await rotate_api_key(
+        pool(request),
+        identity,
+        get_settings().portal_key_issuance_limit_per_hour,
+    )
 
 
 @app.get("/v1/portal/leaderboard", tags=["portal"])

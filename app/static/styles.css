@@ -242,6 +242,8 @@ input::placeholder { color: #78877f; }
 }
 .secret-panel code { display: block; padding: 1rem; overflow-wrap: anywhere; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.3); }
 .secret-actions { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+.danger-outline { margin-top: 1rem; border: 1px solid #9f3434; color: #812929; background: transparent; }
+.danger-outline:hover { color: white; background: #812929; }
 
 .quickstart {
   display: grid;

@@ -30,8 +30,20 @@ mecanismo apropiado para notas oficiales ni información de mayor sensibilidad.
 4. No la publiques en commits, notebooks, capturas, logs o variables de frontend.
 
 La llave completa se muestra una sola vez. El portal conserva únicamente el
-prefijo y el servidor almacena el secreto con scrypt. Si se pierde, el profesor
-debe revocar la anterior y habilitar una nueva.
+prefijo y el servidor almacena el secreto con scrypt.
+
+## Si perdiste la API key
+
+1. Vuelve a entrar al portal con tu correo y documento.
+2. En **Tu API key**, presiona **Generar una nueva API key**.
+3. Confirma que entiendes que la llave anterior dejará de funcionar.
+4. Copia o descarga la nueva credencial antes de recargar la página.
+5. Actualiza inmediatamente `PULSO_API_KEY` en GitHub Actions y en cualquier
+   entorno donde ejecutes el cliente.
+
+La rotación ocurre en una sola transacción: revoca la credencial activa y crea
+una nueva. El secreto anterior no puede recuperarse. El backend limita la
+cantidad de emisiones por hora y registra el cambio sin guardar secretos legibles.
 
 ## Tablero
 

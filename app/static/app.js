@@ -177,6 +177,33 @@ document.querySelector("#generate-key-button").addEventListener("click", async (
   }
 });
 
+document.querySelector("#rotate-key-button").addEventListener("click", async (event) => {
+  const accepted = window.confirm(
+    "La API key actual dejará de funcionar inmediatamente. Tendrás que actualizar PULSO_API_KEY en GitHub Actions y en tus scripts. ¿Generar una nueva?",
+  );
+  if (!accepted) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const result = await api("/v1/portal/api-key/rotate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_revoke: true }),
+    });
+    latestKey = result.api_key;
+    setText("#new-api-key", latestKey);
+    document.querySelector("#copy-key-button").textContent = "Copiar API key";
+    document.querySelector("#secret-panel").hidden = false;
+    await loadDashboard();
+    showMessage("API key anterior revocada. Guarda la nueva antes de salir o recargar.");
+    document.querySelector("#secret-panel").scrollIntoView({ behavior: "smooth", block: "center" });
+  } catch (error) {
+    showMessage(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
 document.querySelector("#copy-key-button").addEventListener("click", async (event) => {
   if (!latestKey) return;
   await navigator.clipboard.writeText(latestKey);

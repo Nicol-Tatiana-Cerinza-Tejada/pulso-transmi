@@ -189,7 +189,7 @@ async def issue_api_key(
                 status_code=409,
                 detail={
                     "code": "api_key_already_issued",
-                    "message": "La API key ya fue generada. Si la perdiste, solicita una rotación al profesor.",
+                    "message": "La API key ya fue generada. Si la perdiste, rótala desde el portal.",
                     "key_prefix": active["key_prefix"],
                 },
             )
@@ -219,6 +219,93 @@ async def issue_api_key(
         "api_key": raw_key,
         "key_prefix": prefix,
         "created_at": created_at,
+        "shown_once": True,
+    }
+
+
+async def rotate_api_key(
+    pool: asyncpg.Pool,
+    identity: PortalIdentity,
+    issuance_limit_per_hour: int,
+) -> dict[str, object]:
+    """Replace the active credential without ever recovering its secret."""
+    raw_key, prefix, secret_hash = generate_api_key()
+    async with pool.acquire() as connection, connection.transaction():
+        await connection.execute(
+            "select pg_advisory_xact_lock(9042026, $1::integer)",
+            identity.participant_id,
+        )
+        active = await connection.fetchrow(
+            """
+            select id, key_prefix
+            from competition.api_keys
+            where participant_id=$1 and revoked_at is null
+            order by created_at desc limit 1
+            """,
+            identity.participant_id,
+        )
+        if active is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "api_key_missing",
+                    "message": "No hay una API key activa para rotar. Genera la primera credencial.",
+                },
+            )
+        issued_recently = await connection.fetchval(
+            """
+            select count(*) from competition.api_keys
+            where participant_id=$1 and created_at > now() - interval '1 hour'
+            """,
+            identity.participant_id,
+        )
+        if int(issued_recently) >= issuance_limit_per_hour:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "api_key_rotation_rate_limited",
+                    "message": "Alcanzaste el límite de cambios de API key. Intenta de nuevo en una hora.",
+                },
+            )
+
+        await connection.execute(
+            """
+            update competition.api_keys set revoked_at=now()
+            where participant_id=$1 and revoked_at is null
+            """,
+            identity.participant_id,
+        )
+        created_at = await connection.fetchval(
+            """
+            insert into competition.api_keys (participant_id,key_prefix,secret_hash)
+            values ($1,$2,$3) returning created_at
+            """,
+            identity.participant_id,
+            prefix,
+            secret_hash,
+        )
+        await connection.execute(
+            "update competition.participants set credential_claimed_at=now() where id=$1",
+            identity.participant_id,
+        )
+        await connection.execute(
+            """
+            insert into ops.audit_events
+                (actor_type, actor_id, action, entity_type, entity_id, metadata)
+            values (
+                'participant',$1,'api_key.rotated','api_key',$2,
+                jsonb_build_object('revoked_key_prefix',$3)
+            )
+            """,
+            identity.public_id,
+            prefix,
+            active["key_prefix"],
+        )
+    return {
+        "api_key": raw_key,
+        "key_prefix": prefix,
+        "created_at": created_at,
+        "revoked_key_prefix": active["key_prefix"],
         "shown_once": True,
     }
 

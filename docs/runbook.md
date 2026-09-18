@@ -123,6 +123,11 @@ sudo docker compose exec scheduler python -m app.admin revoke-api-key \
   --participant-id stu_...
 ```
 
+Desde `0.4.2`, el estudiante puede rotar su propia credencial desde una sesión
+válida del portal. La operación revoca la anterior, registra `api_key.rotated` y
+muestra el nuevo secreto una sola vez. La revocación administrativa se conserva
+para sesiones comprometidas, bloqueos o soporte excepcional.
+
 ## Activar un escenario
 
 La competencia solo corre cuando tanto `sim.scenarios.state` como

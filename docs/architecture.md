@@ -76,6 +76,10 @@ nombre preferido ───────────► sesión temporal          
                                                                   (hash scrypt)
 ```
 
+Si el estudiante pierde el secreto, una sesión válida puede rotarlo. El backend
+toma un lock por participante, revoca la credencial activa y crea la nueva en la
+misma transacción. Nunca recupera ni vuelve a mostrar una llave anterior.
+
 El roster y el pepper no se versionan. El VPS conserva firmas HMAC del correo y
 el documento, no esos valores legibles. El nombre preferido solo vive en la sesión
 temporal y no modifica el nombre oficial de la matrícula. La sesión del navegador

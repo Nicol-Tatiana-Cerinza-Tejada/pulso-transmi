@@ -6,10 +6,10 @@ consumen observaciones que aparecen con el tiempo, entrenan y reentrenan modelos
 envían pronósticos y compiten en un leaderboard que cambia cuando el sistema
 introduce nuevos patrones y drift.
 
-> **Portal y API — 18 de septiembre de 2026:** la versión `0.4.1` añade acceso
-> estudiantil, emisión individual de API keys, tablero de conexión y una ronda
-> de práctica sin activar todavía la generación dinámica. Todo está disponible
-> en `https://pulso-transmi.72-60-245-2.sslip.io`.
+> **Portal y API — 18 de septiembre de 2026:** la versión `0.4.2` añade acceso
+> estudiantil, emisión y rotación autoservicio de API keys, tablero de conexión
+> y una ronda de práctica sin activar todavía la generación dinámica. Todo está
+> disponible en `https://pulso-transmi.72-60-245-2.sslip.io`.
 
 El login valida únicamente correo institucional + documento. El nombre ingresado
 es una preferencia privada para el saludo; el leaderboard conserva el nombre
@@ -88,8 +88,8 @@ Redis, Celery ni un broker en esta versión.
 | Componente | Responsabilidad | Estado |
 |---|---|---|
 | PostgreSQL 17 | Catálogo, simulación privada, competencia y auditoría | Operativo |
-| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.4.1`) |
-| Portal web | Acceso, API key, ronda, recibos y estado de la cohorte | Sesión estudiantil (`0.4.1`) |
+| FastAPI | Historia, stream, ciclos, autenticación, entregas y leaderboard | Pública (`0.4.2`) |
+| Portal web | Acceso, API key, rotación, recibos y estado de la cohorte | Sesión estudiantil (`0.4.2`) |
 | Scheduler | Reloj, publicación, apertura, resolución, scoring y snapshots | Implementado; espera escenario |
 | Caddy | TLS y exposición pública del servicio | Operativo |
 | GitHub Actions | Pipeline gratuito de cada estudiante | Ejemplo inicial publicado; automatización completa siguiente fase |
@@ -104,7 +104,8 @@ el modelo relacional en [docs/data-model.md](docs/data-model.md).
 1. Abre el [portal de Pulso TransMi](https://pulso-transmi.72-60-245-2.sslip.io/).
 2. Ingresa con correo institucional y documento. El nombre es solo la forma en
    que el portal te saludará y no tiene que coincidir con la lista.
-3. Genera tu API key y guárdala: solo se muestra una vez.
+3. Genera tu API key y guárdala: solo se muestra una vez. Si la pierdes, vuelve
+   al portal y rótala; la anterior quedará revocada.
 4. Clona este repositorio y ejecuta el baseline:
 
 ```bash
@@ -121,7 +122,7 @@ El ejemplo descarga el histórico, entrena un Random Forest con variables
 temporales y rezagos, descubre los targets abiertos y envía la predicción. La
 guía completa está en [Primera predicción](docs/primera-prediccion.md).
 
-## API pública `0.4.1`
+## API pública `0.4.2`
 
 La API pública está en `https://pulso-transmi.72-60-245-2.sslip.io`; Swagger se
 encuentra en `/docs`. En el VPS el proceso escucha únicamente en
@@ -145,6 +146,7 @@ encuentra en `/docs`. En el VPS el proceso escucha únicamente en
 | `GET` | `/v1/leaderboard` | Ranking acumulado o rolling 24 h | Sí + key |
 | `POST` | `/v1/portal/login` | Sesión académica del portal | Sí |
 | `POST` | `/v1/portal/api-key` | Emisión única de credencial personal | Sí + sesión |
+| `POST` | `/v1/portal/api-key/rotate` | Revoca y reemplaza la credencial activa | Sí + sesión |
 | `GET` | `/v1/portal/dashboard` | Identidad, ronda y entregas propias | Sí + sesión |
 | `GET` | `/v1/portal/leaderboard` | Conexión o ranking de la cohorte | Sí + sesión |
 
@@ -232,9 +234,9 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-La suite cubre salud, metadatos, filtros, paginación, descargas, API keys,
-validación estricta, hashes canónicos y autenticación por correo + documento. La
-versión `0.4.1` fue además verificada públicamente con un nombre preferido distinto
+La suite cubre salud, metadatos, filtros, paginación, descargas, emisión y
+rotación de API keys, validación estricta, hashes canónicos y autenticación. La
+versión `0.4.2` fue además verificada públicamente con un nombre preferido distinto
 al oficial, sin alterar el nombre mostrado en el leaderboard.
 
 ## Operación en el VPS

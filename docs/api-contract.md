@@ -1,4 +1,4 @@
-# Contrato de API `0.4.1`
+# Contrato de API `0.4.2`
 
 Este documento es el contrato técnico de la plataforma central. Los clientes
 deben descubrir el ciclo vigente en la API y nunca inferirlo a partir de la hora
@@ -96,6 +96,14 @@ firmas. Los errores son genéricos y los intentos están limitados.
 Requiere sesión web. Emite una sola credencial activa por estudiante y muestra
 el secreto únicamente en la respuesta de creación. Si ya existe devuelve
 `409 api_key_already_issued` sin revelar el secreto anterior.
+
+### `POST /v1/portal/api-key/rotate`
+
+Requiere sesión web y el body exacto `{"confirm_revoke": true}`. Revoca todas
+las credenciales activas del estudiante y emite una nueva dentro de la misma
+transacción. La llave anterior deja de autenticar inmediatamente y el secreto
+nuevo solo aparece en esta respuesta. Se permiten como máximo cuatro emisiones
+por estudiante en una hora, incluida la creación inicial.
 
 ### `GET /v1/portal/dashboard` y `GET /v1/portal/leaderboard`
 
@@ -202,10 +210,12 @@ como cero; la cobertura muestra la confiabilidad operacional.
 | 409 | `idempotency_conflict` | Misma llave, payload diferente |
 | 409 | `attempt_limit_reached` | Ya se consumieron tres intentos |
 | 409 | `api_key_already_issued` | La credencial personal ya fue generada |
+| 409 | `api_key_missing` | Se intentó rotar sin una credencial activa |
 | 413 | `payload_too_large` | Body mayor a 64 KB |
 | 415 | `unsupported_media_type` | No se envió JSON |
 | 422 | `invalid_target_set` | Faltan targets, sobran o están repetidos |
 | 429 | `rate_limited` | Más de diez intentos por minuto y API key |
+| 429 | `api_key_rotation_rate_limited` | Se alcanzó el límite horario de emisiones |
 
 Los errores de negocio se entregan bajo `detail.code`; los de esquema usan la
 validación estándar de FastAPI. El cliente debe registrar status, body y

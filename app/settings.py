@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     portal_identity_pepper: str = "development-only-change-me"
     portal_session_hours: int = 12
     portal_login_rate_limit_per_minute: int = 120
+    portal_key_issuance_limit_per_hour: int = 4
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
