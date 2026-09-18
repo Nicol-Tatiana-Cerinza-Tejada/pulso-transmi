@@ -2,7 +2,9 @@ const loginView = document.querySelector("#login-view");
 const dashboardView = document.querySelector("#dashboard-view");
 const globalMessage = document.querySelector("#global-message");
 const SVG_NS = "http://www.w3.org/2000/svg";
-const DEMO_MODE = new URLSearchParams(window.location.search).get("demo") === "1";
+const LOCAL_PREVIEW_HOSTS = new Set(["127.0.0.1", "localhost"]);
+const DEMO_MODE = LOCAL_PREVIEW_HOSTS.has(window.location.hostname)
+  && new URLSearchParams(window.location.search).get("demo") === "1";
 
 const RUNNER_COLORS = [
   "#1b5e3b", "#2d7987", "#7161a7", "#b86743", "#c8a951", "#d94f70",
