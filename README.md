@@ -55,6 +55,24 @@ reproducibles.
 - **Bono:** dashboard en Vercel para visualizar demanda, drift, salud del pipeline
   y posición en el leaderboard.
 
+### Umbrales de monitorización
+
+`src/monitor.py` separa tres señales operativas. Performance drift se activa cuando
+la accuracy media por estación de los últimos tres ciclos consecutivos baja de
+80 %. El 80 % deja un margen claro frente al baseline observado (≈83,8 %) sin
+alertar por una sola ventana ruidosa; exigir tres ciclos reduce falsos positivos.
+
+Data drift usa PSI sobre `observations.value`, comparando las últimas 24 horas
+con los 28 días anteriores. Se alerta desde `PSI >= 0,20`, umbral convencional
+para un cambio material de distribución. Es una feature observable proxy; cuando
+el artefacto incluya distribuciones de features derivadas, debe sustituirse por
+esas distribuciones.
+
+Falla operacional se activa si en las últimas 24 horas existe al menos una
+ejecución del collector fallida o una submission pendiente. La ausencia de una
+submission se trata como señal inmediata porque puede hacer perder una ventana de
+25 minutos, aunque el modelo mantenga buena accuracy.
+
 La prueba inicial usa 12 targets —uno por estación— y comprueba integración. Los
 ciclos oficiales posteriores usarán 48 targets y activarán el score cuando exista
 ground truth revelado.
@@ -325,3 +343,115 @@ El detalle, la evidencia y los criterios de salida se mantienen en
 - GitHub: [uexternadojz/pulso-transmi](https://github.com/uexternadojz/pulso-transmi)
 - Proyecto Academy en Supabase: `Pulso TransMi — Proyecto 1 MLOps`
 - ID operativo: `1dde4b7d-7ab4-4df8-8298-34c25d662750`
+
+## Solución MLOps implementada
+
+### Problema
+
+El sistema predice la demanda futura de las estaciones de TransMilenio para
+cuatro horizontes de 15 minutos. El reto combina ingestión incremental,
+features temporales, entrenamiento reproducible, validación sin fuga temporal,
+entregas idempotentes, evaluación contra valores reales y monitorización de
+drift y fallas operacionales.
+
+### Arquitectura
+
+```mermaid
+flowchart LR
+    API[API Pulso TransMi]
+    CRON[GitHub Actions]
+    COL[src.collector]
+    DB[(Supabase Postgres)]
+    STORAGE[(Supabase Storage)]
+    TRAIN[src.train]
+    INFER[src.infer]
+    EVAL[src.evaluate]
+    MON[src.monitor]
+    BOARD[Leaderboard API]
+
+    CRON --> COL
+    CRON --> TRAIN
+    CRON --> INFER
+    COL -->|stream + cursor| API
+    COL -->|upsert| DB
+    TRAIN -->|observations| DB
+    TRAIN -->|LightGBM versionado| STORAGE
+    TRAIN -->|model_versions| DB
+    INFER -->|clock + ciclo + identidad| API
+    INFER -->|champion| DB
+    STORAGE --> INFER
+    INFER -->|predictions + submission| DB
+    INFER -->|batch idempotente| API
+    EVAL -->|actuals + predictions| DB
+    EVAL -->|métricas| DB
+    EVAL -->|cumulative / rolling_24h| BOARD
+    MON --> DB
+    MON -->|drift_signals| DB
+```
+
+### Esquema de datos
+
+| Tabla | Propósito | Clave principal |
+|---|---|---|
+| `stations` | Catálogo de estaciones, corredor y coordenadas | `station_id` |
+| `observations` | Histórico y stream incremental de demanda | `(station_id, ts)` |
+| `collector_runs` | Cursor, estado y filas procesadas por ejecución | `id` |
+| `model_versions` | Versiones candidate/champion/retired y artefactos | `version` |
+| `predictions` | Predicciones por ciclo, estación y target | `(cycle_id, station_id, target_at)` |
+| `actuals` | Valores reales revelados | `(cycle_id, station_id, target_at)` |
+| `metrics` | Accuracy, WAPE y cobertura por ciclo/estación | `(cycle_id, station_id)` |
+| `drift_signals` | Performance drift, data drift y fallas | `id` |
+| `submission_receipts` | Payload, llave idempotente y recibo de cada intento | `(participant_id, cycle_id, attempt)` |
+
+### Reproducir desde cero
+
+```bash
+git clone https://github.com/uexternadojz/pulso-transmi.git
+cd pulso-transmi
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt -r requirements-student.txt
+```
+
+Configura las credenciales sin incluirlas en Git:
+
+```bash
+export PULSO_API_KEY="ptm_live_..."
+export SUPABASE_URL="https://tu-proyecto.supabase.co"
+export SUPABASE_SERVICE_ROLE_KEY="tu-clave-secreta"
+```
+
+Ejecuta el esquema `sql/01_schema.sql` y la migración
+`sql/02_submission_receipts.sql` en el SQL Editor de Supabase. Después:
+
+```bash
+python -m src.collector
+python -m src.train --bucket model-artifacts
+python -m src.infer --bucket model-artifacts
+python -m src.evaluate
+python -m src.monitor
+```
+
+Para ejecutar el EDA:
+
+```bash
+jupyter notebook notebooks/01_eda.ipynb
+```
+
+Los workflows de GitHub Actions automatizan estos pasos y requieren los
+secrets `PULSO_API_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`.
+
+### Resultados: baselines vs champion
+
+Accuracy oficial: promedio no ponderado de las 12 accuracies por estación.
+
+| Modelo | +15 min | +30 min | +45 min | +60 min | Promedio |
+|---|---:|---:|---:|---:|---:|
+| Media móvil | 77.0778 | 70.5461 | 63.7218 | 57.1098 | 67.6139 |
+| Naive | 83.3629 | 78.4018 | 72.3882 | 65.3146 | 74.8669 |
+| Seasonal naive | 83.7894 | 83.7994 | 83.7869 | 83.7978 | 83.7934 |
+| **LightGBM champion** | **87.3088** | **87.0245** | **86.0794** | **85.4195** | **86.4581** |
+
+El champion superó al mejor baseline agregado por `2.6647` puntos porcentuales
+y fue promovido solo después de superar la validación y pasar una inferencia de
+prueba.

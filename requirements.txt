@@ -1,4 +1,6 @@
 asyncpg==0.30.0
 fastapi==0.115.14
+httpx==0.28.1
 pydantic-settings==2.10.1
+supabase>=2.0,<3.0
 uvicorn[standard]==0.34.3
