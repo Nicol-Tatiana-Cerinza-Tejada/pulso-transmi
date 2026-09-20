@@ -105,6 +105,25 @@ def evaluate(db: SupabaseDB, api: PulsoTransmiClient) -> dict[str, Any]:
         "cumulative": api.leaderboard(window="cumulative"),
         "rolling_24h": api.leaderboard(window="rolling_24h"),
     }
+    snapshot_rows = []
+    for window_type, leaderboard in leaderboards.items():
+        for row in leaderboard.get("data", []):
+            snapshot_rows.append(
+                {
+                    "window_type": window_type,
+                    "display_name": str(row.get("display_name", "")),
+                    "kind": row.get("kind"),
+                    "eligible": row.get("eligible"),
+                    "accuracy": row.get("accuracy"),
+                    "raw_wape": row.get("raw_wape"),
+                    "accuracy_at_20": row.get("accuracy_at_20"),
+                    "coverage": row.get("coverage"),
+                    "rank": row.get("rank"),
+                    "calculated_at": row.get("calculated_at") or datetime.now(timezone.utc).isoformat(),
+                }
+            )
+    if snapshot_rows:
+        db.insert("leaderboard_snapshots", snapshot_rows)
     print(f"Ciclos evaluados: {actuals['cycle_id'].nunique()}")
     print(f"Métricas guardadas: {len(records)}")
     print(f"Leaderboard cumulative: {leaderboards['cumulative']}")

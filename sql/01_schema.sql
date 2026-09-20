@@ -191,4 +191,46 @@ comment on table submission_receipts is
 create index if not exists submission_receipts_cycle_idx
     on submission_receipts (participant_id, cycle_id, attempt desc);
 
+create table if not exists leaderboard_snapshots (
+    id bigint generated always as identity primary key,
+    window_type text not null check (window_type in ('cumulative', 'rolling_24h')),
+    display_name text not null,
+    kind text,
+    eligible boolean,
+    accuracy numeric(7, 4),
+    raw_wape numeric(12, 6),
+    accuracy_at_20 numeric(7, 4),
+    coverage numeric(7, 6),
+    rank integer check (rank is null or rank > 0),
+    calculated_at timestamptz not null default now()
+);
+
+comment on table leaderboard_snapshots is
+    'Snapshots públicos del leaderboard acumulado y rolling 24h; no contiene credenciales, payloads ni recibos.';
+
+create index if not exists leaderboard_snapshots_latest_idx
+    on leaderboard_snapshots (window_type, display_name, calculated_at desc);
+
+create table if not exists model_promotion_events (
+    id bigint generated always as identity primary key,
+    requested_version text not null references model_versions(version),
+    previous_version text references model_versions(version),
+    action text not null default 'rollback' check (action in ('promotion', 'rollback')),
+    reason text not null check (btrim(reason) <> ''),
+    status text not null default 'pending' check (status in ('pending', 'succeeded', 'failed')),
+    verification jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    completed_at timestamptz,
+    error text
+);
+
+comment on table model_promotion_events is
+    'Auditoría de rollbacks/promociones de modelos: versión solicitada, champion anterior, motivo, verificación y timestamps.';
+
+create index if not exists model_promotion_events_created_idx
+    on model_promotion_events (created_at desc);
+
+create index if not exists model_promotion_events_version_idx
+    on model_promotion_events (requested_version, created_at desc);
+
 commit;

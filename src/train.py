@@ -272,8 +272,33 @@ def train_and_register(
 
     promoted = model_accuracy > best_baseline and smoke_ok
     if promoted:
+        champion_response = (
+            db.client.table("model_versions")
+            .select("version")
+            .eq("status", "champion")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        previous_version = champion_response.data[0]["version"] if champion_response.data else None
         db.client.table("model_versions").update({"status": "retired"}).eq("status", "champion").execute()
         db.client.table("model_versions").update({"status": "champion"}).eq("version", version).execute()
+        db.insert(
+            "model_promotion_events",
+            {
+                "requested_version": version,
+                "previous_version": previous_version,
+                "action": "promotion",
+                "reason": "superó al mejor baseline y pasó la inferencia de prueba",
+                "status": "succeeded",
+                "verification": {
+                    "validation_accuracy": model_accuracy,
+                    "best_baseline_accuracy": best_baseline,
+                    "smoke_inference": smoke_ok,
+                },
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
     print(f"Modelo: {version} | accuracy={model_accuracy:.4f} | baseline={best_baseline:.4f} | status={'champion' if promoted else 'candidate'}")
     return {"version": version, "comparison": comparison, "promoted": promoted, "artifact_path": artifact_path}
 

@@ -421,8 +421,14 @@ export SUPABASE_URL="https://tu-proyecto.supabase.co"
 export SUPABASE_SERVICE_ROLE_KEY="tu-clave-secreta"
 ```
 
-Ejecuta el esquema `sql/01_schema.sql` y la migración
-`sql/02_submission_receipts.sql` en el SQL Editor de Supabase. Después:
+Ejecuta el esquema `sql/01_schema.sql` y, si el proyecto ya existía, las
+migraciones `sql/02_submission_receipts.sql`, `sql/03_model_promotion_events.sql`
+y `sql/02_readonly_views.sql` en el SQL Editor de Supabase. La última crea las
+vistas públicas del dashboard y activa RLS sobre las tablas base; concede
+`SELECT` únicamente sobre las vistas, nunca sobre submissions, recibos o
+credenciales.
+
+Después:
 
 ```bash
 python -m src.collector
