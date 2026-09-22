@@ -61,6 +61,10 @@ El navegador refresca los datos cada 60 segundos. Durante el arranque, ante
 una consulta vacía o mientras la competencia no esté activa, muestra estados
 de carga y “sin datos aún” en lugar de fallar.
 
+Cuando `src.train --from-supabase`, `src.evaluate` o `src.monitor` escriben en
+Supabase, el dashboard recoge esos cambios en el siguiente refresco automático;
+no necesita un redeploy de Vercel para actualizar sus datos.
+
 ## Seguridad
 
 Las variables `NEXT_PUBLIC_*` se incluyen en el bundle por diseño: la
