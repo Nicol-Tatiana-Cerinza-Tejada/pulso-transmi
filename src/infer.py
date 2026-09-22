@@ -65,6 +65,16 @@ def load_observations_until(db: SupabaseDB, cutoff: pd.Timestamp, page_size: int
     return frame
 
 
+def latest_value_at_or_before(series: pd.Series, timestamp: pd.Timestamp, *, station_id: str) -> float:
+    """Devuelve el último dato disponible sin cruzar el corte temporal."""
+    available = series.loc[:timestamp]
+    if available.empty:
+        raise RuntimeError(
+            f"No hay observaciones anteriores a {timestamp.isoformat()} para station_id={station_id}"
+        )
+    return float(available.iloc[-1])
+
+
 def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], cutoff: pd.Timestamp) -> tuple[pd.DataFrame, dict[int, list[int]]]:
     """Construye una fila por target usando únicamente history <= cutoff."""
     history = history[history["ts"] <= cutoff].copy()
@@ -97,9 +107,9 @@ def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], 
         }
         for lag in (1, 2, 4, 8, 96, 672):
             timestamp = cutoff - lag * FREQUENCY
-            if timestamp not in series.index:
-                raise RuntimeError(f"Falta lag_{lag} para station_id={station_id}")
-            features[f"lag_{lag}"] = float(series.loc[timestamp])
+            features[f"lag_{lag}"] = latest_value_at_or_before(
+                series, timestamp, station_id=station_id
+            )
         history_to_cutoff = series[series.index <= cutoff]
         for window in (4, 96, 672):
             if len(history_to_cutoff) < window:
