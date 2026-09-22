@@ -53,14 +53,49 @@ def materialize_actuals(db: SupabaseDB, predictions: pd.DataFrame) -> int:
     return len(rows)
 
 
+def save_leaderboard_snapshots(db: SupabaseDB, leaderboards: dict[str, dict[str, Any]]) -> int:
+    """Persiste únicamente las columnas públicas necesarias para el dashboard."""
+    snapshot_rows: list[dict[str, Any]] = []
+    for window_type, leaderboard in leaderboards.items():
+        for row in leaderboard.get("data", []):
+            snapshot_rows.append(
+                {
+                    "window_type": window_type,
+                    "display_name": str(row.get("display_name", "")),
+                    "kind": row.get("kind"),
+                    "eligible": row.get("eligible"),
+                    "accuracy": row.get("accuracy"),
+                    "raw_wape": row.get("raw_wape"),
+                    "accuracy_at_20": row.get("accuracy_at_20"),
+                    "coverage": row.get("coverage"),
+                    "rank": row.get("rank"),
+                    "calculated_at": row.get("calculated_at") or datetime.now(timezone.utc).isoformat(),
+                }
+            )
+    if snapshot_rows:
+        db.insert("leaderboard_snapshots", snapshot_rows)
+    return len(snapshot_rows)
+
+
 def evaluate(db: SupabaseDB, api: PulsoTransmiClient) -> dict[str, Any]:
     predictions = fetch_all(
         db, "predictions", "cycle_id,station_id,target_at,value,submission_id"
     )
     materialized = materialize_actuals(db, predictions)
+    leaderboards = {
+        "cumulative": api.leaderboard(window="cumulative"),
+        "rolling_24h": api.leaderboard(window="rolling_24h"),
+    }
+    snapshots = save_leaderboard_snapshots(db, leaderboards)
     actuals = fetch_all(db, "actuals", "cycle_id,station_id,target_at,value")
     if actuals.empty:
-        return {"status": "no_actuals", "materialized_actuals": materialized, "cycles": 0}
+        return {
+            "status": "no_actuals",
+            "materialized_actuals": materialized,
+            "snapshots": snapshots,
+            "cycles": 0,
+            "leaderboards": leaderboards,
+        }
 
     actuals["target_at"] = pd.to_datetime(actuals["target_at"], utc=True)
     if predictions.empty:
@@ -101,31 +136,9 @@ def evaluate(db: SupabaseDB, api: PulsoTransmiClient) -> dict[str, Any]:
     if records:
         db.upsert("metrics", records, on_conflict="cycle_id,station_id")
 
-    leaderboards = {
-        "cumulative": api.leaderboard(window="cumulative"),
-        "rolling_24h": api.leaderboard(window="rolling_24h"),
-    }
-    snapshot_rows = []
-    for window_type, leaderboard in leaderboards.items():
-        for row in leaderboard.get("data", []):
-            snapshot_rows.append(
-                {
-                    "window_type": window_type,
-                    "display_name": str(row.get("display_name", "")),
-                    "kind": row.get("kind"),
-                    "eligible": row.get("eligible"),
-                    "accuracy": row.get("accuracy"),
-                    "raw_wape": row.get("raw_wape"),
-                    "accuracy_at_20": row.get("accuracy_at_20"),
-                    "coverage": row.get("coverage"),
-                    "rank": row.get("rank"),
-                    "calculated_at": row.get("calculated_at") or datetime.now(timezone.utc).isoformat(),
-                }
-            )
-    if snapshot_rows:
-        db.insert("leaderboard_snapshots", snapshot_rows)
     print(f"Ciclos evaluados: {actuals['cycle_id'].nunique()}")
     print(f"Métricas guardadas: {len(records)}")
+    print(f"Snapshots de leaderboard guardados: {snapshots}")
     print(f"Leaderboard cumulative: {leaderboards['cumulative']}")
     print(f"Leaderboard rolling_24h: {leaderboards['rolling_24h']}")
     return {

@@ -432,7 +432,7 @@ Después:
 
 ```bash
 python -m src.collector
-python -m src.train --bucket model-artifacts
+python -m src.train --from-supabase --bucket model-artifacts
 python -m src.infer --bucket model-artifacts
 python -m src.evaluate
 python -m src.monitor
@@ -446,6 +446,8 @@ jupyter notebook notebooks/01_eda.ipynb
 
 Los workflows de GitHub Actions automatizan estos pasos y requieren los
 secrets `PULSO_API_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`.
+El entrenamiento programado usa `--from-supabase` para incorporar el histórico
+real que el collector ya confirmó, en vez de quedarse con el starter local.
 
 ### Resultados: baselines vs champion
 

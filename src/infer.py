@@ -83,13 +83,19 @@ def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], 
         series = series_by_station.get(station_id)
         if series is None:
             raise RuntimeError(f"No hay histórico para station_id={station_id}")
+        hour = target_at.hour
+        weekday = target_at.dayofweek
         features: dict[str, Any] = {
             "station_id": station_id,
             "target_at": target_at,
-            "target_hour": target_at.hour,
-            "target_weekday": target_at.dayofweek,
+            "target_hour": hour,
+            "target_weekday": weekday,
+            "target_hour_sin": float(np.sin(2 * np.pi * hour / 24)),
+            "target_hour_cos": float(np.cos(2 * np.pi * hour / 24)),
+            "target_weekday_sin": float(np.sin(2 * np.pi * weekday / 7)),
+            "target_weekday_cos": float(np.cos(2 * np.pi * weekday / 7)),
         }
-        for lag in (1, 2, 4, 96, 672):
+        for lag in (1, 2, 4, 8, 96, 672):
             timestamp = cutoff - lag * FREQUENCY
             if timestamp not in series.index:
                 raise RuntimeError(f"Falta lag_{lag} para station_id={station_id}")
@@ -99,6 +105,10 @@ def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], 
             if len(history_to_cutoff) < window:
                 raise RuntimeError(f"Falta historia para rolling_mean_{window} de {station_id}")
             features[f"rolling_mean_{window}"] = float(history_to_cutoff.tail(window).mean())
+        recent_96 = history_to_cutoff.tail(96)
+        recent_4 = history_to_cutoff.tail(4)
+        features["rolling_std_96"] = float(recent_96.std(ddof=0))
+        features["trend_4_96"] = float(recent_4.mean() - recent_96.mean())
         positions[horizon].append(len(rows))
         rows.append(features)
     return pd.DataFrame(rows), positions
@@ -251,6 +261,12 @@ def main() -> int:
     args = parser.parse_args()
     try:
         with PulsoTransmiClient() as api:
+            # El estado waiting es una salida válida y no debe obligar a
+            # configurar Supabase cuando todavía no hay ciclo que procesar.
+            if api.clock().get("state") == "waiting":
+                result = {"status": "waiting"}
+                print(result)
+                return 0
             result = run_inference(api, SupabaseDB(), bucket=args.bucket)
         print(result)
         return 0 if result["status"] in {"waiting", "no_open_cycle", "already_submitted", "accepted"} else 1

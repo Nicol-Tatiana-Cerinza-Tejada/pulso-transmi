@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .baselines import FREQUENCY, HORIZONS, prepare_observations, temporal_backtest
@@ -17,13 +18,19 @@ from .db import SupabaseDB
 from .metrics import official_accuracy
 
 
-LAG_STEPS = (1, 2, 4, 96, 672)
+LAG_STEPS = (1, 2, 4, 8, 96, 672)
 ROLLING_WINDOWS = (4, 96, 672)
 FEATURE_NAMES = [
     *(f"lag_{steps}" for steps in LAG_STEPS),
     *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
+    "rolling_std_96",
+    "trend_4_96",
     "target_hour",
     "target_weekday",
+    "target_hour_sin",
+    "target_hour_cos",
+    "target_weekday_sin",
+    "target_weekday_cos",
     "station_id",
 ]
 
@@ -90,13 +97,23 @@ def feature_rows(
             history_to_origin = series[series.index <= origin]
             for window in ROLLING_WINDOWS:
                 values[f"rolling_mean_{window}"] = float(history_to_origin.tail(window).mean())
+            recent_96 = history_to_origin.tail(96)
+            recent_4 = history_to_origin.tail(4)
+            values["rolling_std_96"] = float(recent_96.std(ddof=0))
+            values["trend_4_96"] = float(recent_4.mean() - recent_96.mean())
+            hour = target_at.hour
+            weekday = target_at.dayofweek
             rows.append(
                 {
                     "station_id": station_id,
                     "origin_at": origin,
                     "target_at": target_at,
-                    "target_hour": target_at.hour,
-                    "target_weekday": target_at.dayofweek,
+                    "target_hour": hour,
+                    "target_weekday": weekday,
+                    "target_hour_sin": float(np.sin(2 * np.pi * hour / 24)),
+                    "target_hour_cos": float(np.cos(2 * np.pi * hour / 24)),
+                    "target_weekday_sin": float(np.sin(2 * np.pi * weekday / 7)),
+                    "target_weekday_cos": float(np.cos(2 * np.pi * weekday / 7)),
                     "actual": float(series.loc[target_at]),
                     **values,
                 }
@@ -108,8 +125,14 @@ def encode_features(frame: pd.DataFrame, columns: list[str] | None = None) -> tu
     base_columns = [
         *(f"lag_{steps}" for steps in LAG_STEPS),
         *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
+        "rolling_std_96",
+        "trend_4_96",
         "target_hour",
         "target_weekday",
+        "target_hour_sin",
+        "target_hour_cos",
+        "target_weekday_sin",
+        "target_weekday_cos",
         "station_id",
     ]
     matrix = pd.get_dummies(frame[base_columns], columns=["station_id"], dtype=float)
@@ -179,7 +202,10 @@ def train_and_validate(
     for horizon in HORIZONS:
         # El target de una fila de entrenamiento también debe estar dentro del
         # corte; así no usamos etiquetas futuras aunque sus features sean pasadas.
-        train_origin_max = train_cutoff - max(HORIZONS) * FREQUENCY
+        # Cada modelo puede usar datos hasta el último origen cuyo target siga
+        # dentro del corte. Antes se restaba el horizonte máximo para todos,
+        # descartando innecesariamente hasta una hora de entrenamiento.
+        train_origin_max = train_cutoff - horizon * FREQUENCY
         train = feature_rows(prepared, horizon_minutes=horizon, max_origin=train_origin_max)
         valid = feature_rows(prepared, horizon_minutes=horizon, origins=origins)
         if train.empty or valid.empty:
@@ -188,7 +214,7 @@ def train_and_validate(
         valid_matrix, _ = encode_features(valid, feature_columns)
         model = train_lightgbm(train_matrix, train["actual"])
         prediction = model.predict(valid_matrix)
-        if len(prediction) != len(valid) or not pd.Series(prediction).map(pd.notna).all():
+        if len(prediction) != len(valid) or not np.isfinite(prediction).all():
             raise RuntimeError(f"Inferencia inválida para horizonte +{horizon}")
         validation_rows.append(
             valid[["station_id", "target_at", "actual"]].assign(
@@ -225,6 +251,32 @@ def artifact_bytes(models: dict[int, Any], feature_columns: list[str], metadata:
     buffer = io.BytesIO()
     joblib.dump(payload, buffer, compress=3)
     return buffer.getvalue()
+
+
+def observations_from_supabase(db: SupabaseDB, page_size: int = 1000) -> pd.DataFrame:
+    """Descarga el histórico persistido por el collector, paginado y ordenado."""
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        response = (
+            db.client.table("observations")
+            .select("station_id,ts,value")
+            .order("ts")
+            .order("station_id")
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        page = list(response.data or [])
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    if not rows:
+        raise RuntimeError("Supabase no tiene observations para entrenar")
+    frame = pd.DataFrame(rows)
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
+    frame["value"] = pd.to_numeric(frame["value"], errors="raise")
+    return frame
 
 
 def train_and_register(
@@ -270,47 +322,100 @@ def train_and_register(
         },
     )
 
-    promoted = model_accuracy > best_baseline and smoke_ok
+    current_champion_response = (
+        db.client.table("model_versions")
+        .select("version,metric")
+        .eq("status", "champion")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    current_champion = current_champion_response.data[0] if current_champion_response.data else None
+    current_champion_metric = (
+        float(current_champion["metric"])
+        if current_champion and current_champion.get("metric") is not None
+        else None
+    )
+    promotion_reference = max(best_baseline, current_champion_metric or float("-inf"))
+    promoted = model_accuracy > promotion_reference and smoke_ok
     if promoted:
-        champion_response = (
-            db.client.table("model_versions")
-            .select("version")
-            .eq("status", "champion")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        previous_version = champion_response.data[0]["version"] if champion_response.data else None
-        db.client.table("model_versions").update({"status": "retired"}).eq("status", "champion").execute()
-        db.client.table("model_versions").update({"status": "champion"}).eq("version", version).execute()
-        db.insert(
+        previous_version = current_champion["version"] if current_champion else None
+        event_rows = db.insert(
             "model_promotion_events",
             {
                 "requested_version": version,
                 "previous_version": previous_version,
                 "action": "promotion",
-                "reason": "superó al mejor baseline y pasó la inferencia de prueba",
-                "status": "succeeded",
+                "reason": "superó al mejor baseline, al champion vigente y pasó la inferencia de prueba",
+                "status": "pending",
                 "verification": {
                     "validation_accuracy": model_accuracy,
                     "best_baseline_accuracy": best_baseline,
                     "smoke_inference": smoke_ok,
                 },
-                "completed_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-    print(f"Modelo: {version} | accuracy={model_accuracy:.4f} | baseline={best_baseline:.4f} | status={'champion' if promoted else 'candidate'}")
+        if not event_rows:
+            raise RuntimeError("No se pudo abrir el evento de promoción")
+        event_id = event_rows[0]["id"]
+        changed = False
+        try:
+            db.client.table("model_versions").update({"status": "retired"}).eq("status", "champion").execute()
+            db.client.table("model_versions").update({"status": "champion"}).eq("version", version).execute()
+            changed = True
+            db.client.table("model_promotion_events").update(
+                {
+                    "status": "succeeded",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ).eq("id", event_id).execute()
+        except Exception as exc:
+            if changed and previous_version:
+                try:
+                    db.client.table("model_versions").update({"status": "retired"}).eq("version", version).execute()
+                    db.client.table("model_versions").update({"status": "champion"}).eq("version", previous_version).execute()
+                except Exception:
+                    pass
+            try:
+                db.client.table("model_promotion_events").update(
+                    {
+                        "status": "failed",
+                        "error": str(exc)[:4000],
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ).eq("id", event_id).execute()
+            except Exception:
+                pass
+            raise RuntimeError(f"No se pudo registrar la promoción: {exc}") from exc
+    print(
+        f"Modelo: {version} | accuracy={model_accuracy:.4f} | "
+        f"umbral_promoción={promotion_reference:.4f} | "
+        f"status={'champion' if promoted else 'candidate'}"
+    )
     return {"version": version, "comparison": comparison, "promoted": promoted, "artifact_path": artifact_path}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, default=Path("data/starter/observations.csv"))
+    parser.add_argument(
+        "--from-supabase",
+        action="store_true",
+        help="entrena con observations persistidas por el collector",
+    )
     parser.add_argument("--bucket", default="model-artifacts")
     parser.add_argument("--origins", type=int, default=96)
     args = parser.parse_args()
-    observations = pd.read_csv(args.data, dtype={"station_id": "string"})
-    train_and_register(observations, bucket=args.bucket, test_origins=args.origins)
+    db = SupabaseDB() if args.from_supabase else None
+    observations = observations_from_supabase(db) if db is not None else pd.read_csv(
+        args.data, dtype={"station_id": "string"}
+    )
+    train_and_register(
+        observations,
+        db=db,
+        bucket=args.bucket,
+        test_origins=args.origins,
+    )
 
 
 if __name__ == "__main__":

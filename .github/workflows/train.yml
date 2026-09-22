@@ -34,4 +34,4 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-student.txt
 
       - name: Train, validate and register model
-        run: python -m src.train --bucket model-artifacts
+        run: python -m src.train --from-supabase --bucket model-artifacts
