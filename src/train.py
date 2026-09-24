@@ -20,6 +20,7 @@ from .metrics import official_accuracy
 
 LAG_STEPS = (1, 2, 4, 8, 96, 672)
 ROLLING_WINDOWS = (4, 96, 672)
+MIN_PROMOTION_ACCURACY = 85.0
 FEATURE_NAMES = [
     *(f"lag_{steps}" for steps in LAG_STEPS),
     *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
@@ -336,7 +337,11 @@ def train_and_register(
         if current_champion and current_champion.get("metric") is not None
         else None
     )
-    promotion_reference = max(best_baseline, current_champion_metric or float("-inf"))
+    promotion_reference = max(
+        MIN_PROMOTION_ACCURACY,
+        best_baseline,
+        current_champion_metric or float("-inf"),
+    )
     promoted = model_accuracy > promotion_reference and smoke_ok
     if promoted:
         previous_version = current_champion["version"] if current_champion else None

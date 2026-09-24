@@ -6,7 +6,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pulso-infer
+  # Comparte el lock con collector.yml porque este workflow también ingesta
+  # antes de inferir; así nunca compiten por el cursor confirmado.
+  group: pulso-ingestion
   cancel-in-progress: false
 
 jobs:
@@ -41,3 +43,6 @@ jobs:
 
       - name: Evaluate revealed targets and leaderboard
         run: python -m src.evaluate
+
+      - name: Monitor drift and pipeline
+        run: python -m src.monitor

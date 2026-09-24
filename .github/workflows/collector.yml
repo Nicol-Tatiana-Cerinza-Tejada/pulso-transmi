@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pulso-collector
+  group: pulso-ingestion
   cancel-in-progress: false
 
 jobs:
