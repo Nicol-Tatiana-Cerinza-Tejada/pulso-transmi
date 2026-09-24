@@ -448,6 +448,16 @@ Los workflows de GitHub Actions automatizan estos pasos y requieren los
 secrets `PULSO_API_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`.
 El entrenamiento programado usa `--from-supabase` para incorporar el histórico
 real que el collector ya confirmó, en vez de quedarse con el starter local.
+La validación usa 96 cortes horarios con los cuatro horizontes, puntúa el WAPE
+oficial sobre las 12 estaciones y equilibra el peso de entrenamiento por
+estación. Después de validar, el artefacto de producción se reajusta con todas
+las observaciones disponibles. Un candidato solo se promueve si supera 85%, al
+mejor baseline y al champion medido en esos mismos ciclos por al menos 0,5
+puntos, además de pasar una inferencia de prueba.
+
+En la comprobación offline del 24 de septiembre de 2026, el candidato obtuvo
+85,5963% frente a 82,7461% del mejor baseline. El champion obtuvo 85,5984% en
+esa misma ventana; por la diferencia mínima, no se justificó reemplazarlo.
 
 ### Resultados: baselines vs champion
 

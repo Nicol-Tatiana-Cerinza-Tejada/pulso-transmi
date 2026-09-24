@@ -17,6 +17,27 @@ FREQUENCY = pd.Timedelta(minutes=15)
 WEEK = pd.Timedelta(days=7)
 
 
+def validation_cycle_origins(observations: pd.DataFrame, test_origins: int) -> pd.DatetimeIndex:
+    """Selecciona cortes horarios como los ciclos reales de la API."""
+    if test_origins < 1:
+        raise ValueError("test_origins debe ser positivo")
+    history = prepare_observations(observations)
+    timestamps = pd.DatetimeIndex(history["target_at"].drop_duplicates().sort_values())
+    if len(timestamps) <= 4:
+        raise ValueError("No hay suficiente historia para la validación temporal")
+
+    # Cada ciclo real se abre en punto de hora y pide cuatro horizontes.
+    # Reservamos los cuatro últimos slots para garantizar que +60 tenga real.
+    last_origin = timestamps[-5]
+    eligible = timestamps[timestamps <= last_origin]
+    hourly = eligible[(eligible.minute == 0) & (eligible.second == 0)]
+    if len(hourly) < test_origins:
+        raise ValueError(
+            f"Se solicitaron {test_origins} ciclos horarios, pero solo hay {len(hourly)} disponibles"
+        )
+    return hourly[-test_origins:]
+
+
 def prepare_observations(frame: pd.DataFrame) -> pd.DataFrame:
     """Normaliza observations.csv o un DataFrame equivalente."""
     if "ts" in frame.columns:
@@ -75,12 +96,7 @@ def temporal_backtest(
 ) -> pd.DataFrame:
     """Evalúa con orígenes consecutivos y targets exclusivamente futuros."""
     history = prepare_observations(observations)
-    timestamps = history["target_at"].drop_duplicates().sort_values()
-    if len(timestamps) <= max(test_origins + 4, 4):
-        raise ValueError("No hay suficiente historia para la validación temporal")
-
-    last_origin = timestamps.iloc[-5]
-    origins = timestamps[timestamps <= last_origin].tail(test_origins)
+    origins = validation_cycle_origins(history, test_origins)
     methods: dict[str, Callable[[pd.DataFrame, pd.DataFrame, str, int], pd.DataFrame]] = {
         "naive": _lookup,
         "seasonal_naive": _lookup,

@@ -13,7 +13,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .baselines import FREQUENCY, HORIZONS, prepare_observations, temporal_backtest
+from .baselines import (
+    FREQUENCY,
+    HORIZONS,
+    prepare_observations,
+    temporal_backtest,
+    validation_cycle_origins,
+)
 from .db import SupabaseDB
 from .metrics import official_accuracy
 
@@ -21,6 +27,7 @@ from .metrics import official_accuracy
 LAG_STEPS = (1, 2, 4, 8, 96, 672)
 ROLLING_WINDOWS = (4, 96, 672)
 MIN_PROMOTION_ACCURACY = 85.0
+MIN_PROMOTION_MARGIN = 0.5
 FEATURE_NAMES = [
     *(f"lag_{steps}" for steps in LAG_STEPS),
     *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
@@ -47,11 +54,7 @@ def git_commit() -> str | None:
 
 
 def validation_origins(observations: pd.DataFrame, test_origins: int) -> pd.DatetimeIndex:
-    history = prepare_observations(observations)
-    timestamps = history["target_at"].drop_duplicates().sort_values()
-    if len(timestamps) <= test_origins + 4:
-        raise ValueError("No hay suficientes timestamps para validar temporalmente")
-    return pd.DatetimeIndex(timestamps[timestamps <= timestamps.iloc[-5]].tail(test_origins))
+    return validation_cycle_origins(observations, test_origins)
 
 
 def _station_series(history: pd.DataFrame) -> dict[str, pd.Series]:
@@ -143,7 +146,12 @@ def encode_features(frame: pd.DataFrame, columns: list[str] | None = None) -> tu
     return matrix, list(matrix.columns)
 
 
-def train_lightgbm(train_features: pd.DataFrame, target: pd.Series):
+def train_lightgbm(
+    train_features: pd.DataFrame,
+    target: pd.Series,
+    *,
+    sample_weight: np.ndarray | None = None,
+):
     try:
         from lightgbm import LGBMRegressor
     except ImportError as exc:
@@ -160,8 +168,15 @@ def train_lightgbm(train_features: pd.DataFrame, target: pd.Series):
         n_jobs=-1,
         verbosity=-1,
     )
-    model.fit(train_features, target)
+    model.fit(train_features, target, sample_weight=sample_weight)
     return model
+
+
+def station_balance_weights(frame: pd.DataFrame) -> np.ndarray:
+    """Aproxima el peso no ponderado por estación de la métrica oficial."""
+    totals = frame.groupby("station_id")["actual"].sum().clip(lower=1.0)
+    weights = frame["station_id"].map(lambda station: 1.0 / float(totals[station])).to_numpy()
+    return weights / weights.mean()
 
 
 def _accuracy_rows(frame: pd.DataFrame, group_columns: list[str], *, prediction_column: str) -> pd.DataFrame:
@@ -175,12 +190,41 @@ def _accuracy_rows(frame: pd.DataFrame, group_columns: list[str], *, prediction_
     return pd.DataFrame(rows)
 
 
+def artifact_validation_accuracy(
+    artifact: dict[str, Any],
+    validation_features: dict[int, pd.DataFrame],
+) -> float:
+    """Evalúa un artefacto en los mismos ciclos y con la métrica oficial."""
+    scored: list[pd.DataFrame] = []
+    for horizon, valid in validation_features.items():
+        matrix, _ = encode_features(valid, artifact["feature_columns"])
+        values = np.maximum(0.0, np.asarray(artifact["models"][horizon].predict(matrix), dtype=float))
+        if len(values) != len(valid) or not np.isfinite(values).all():
+            raise RuntimeError(f"Inferencia de validación inválida para horizonte +{horizon}")
+        scored.append(
+            valid[["station_id", "target_at", "actual"]].assign(prediction=values)
+        )
+    frame = pd.concat(scored, ignore_index=True)
+    actuals = frame[["station_id", "target_at", "actual"]].rename(columns={"actual": "value"})
+    predictions = frame[["station_id", "target_at", "prediction"]].rename(columns={"prediction": "value"})
+    return official_accuracy(actuals, predictions)
+
+
 def train_and_validate(
     observations: pd.DataFrame,
     *,
     test_origins: int = 96,
-) -> tuple[dict[int, Any], pd.DataFrame, float, float, list[str], pd.Timestamp, dict[int, pd.DataFrame]]:
-    """Entrena cuatro modelos y devuelve modelos, tabla, métricas y features."""
+) -> tuple[
+    dict[int, Any],
+    pd.DataFrame,
+    float,
+    float,
+    list[str],
+    pd.Timestamp,
+    dict[int, pd.DataFrame],
+    dict[int, pd.DataFrame],
+]:
+    """Entrena por horizonte y valida en ciclos horarios completos."""
     origins = validation_origins(observations, test_origins)
     first_validation_origin = origins.min()
     prepared = prepare_observations(observations)
@@ -188,6 +232,7 @@ def train_and_validate(
     models: dict[int, Any] = {}
     smoke_inputs: dict[int, pd.DataFrame] = {}
     validation_rows: list[pd.DataFrame] = []
+    validation_features: dict[int, pd.DataFrame] = {}
     feature_columns: list[str] = []
 
     baseline_raw = temporal_backtest(observations, test_origins=test_origins)
@@ -197,6 +242,11 @@ def train_and_validate(
     baseline_summary = _accuracy_rows(
         baseline_for_scoring,
         ["method", "horizon_minutes"],
+        prediction_column="prediction",
+    )
+    baseline_official = _accuracy_rows(
+        baseline_for_scoring,
+        ["method"],
         prediction_column="prediction",
     )
 
@@ -213,8 +263,12 @@ def train_and_validate(
             raise ValueError(f"No hay features suficientes para horizonte +{horizon}")
         train_matrix, feature_columns = encode_features(train)
         valid_matrix, _ = encode_features(valid, feature_columns)
-        model = train_lightgbm(train_matrix, train["actual"])
-        prediction = model.predict(valid_matrix)
+        model = train_lightgbm(
+            train_matrix,
+            train["actual"],
+            sample_weight=station_balance_weights(train),
+        )
+        prediction = np.maximum(0.0, np.asarray(model.predict(valid_matrix), dtype=float))
         if len(prediction) != len(valid) or not np.isfinite(prediction).all():
             raise RuntimeError(f"Inferencia inválida para horizonte +{horizon}")
         validation_rows.append(
@@ -226,6 +280,7 @@ def train_and_validate(
         )
         models[horizon] = model
         smoke_inputs[horizon] = valid_matrix.iloc[[0]]
+        validation_features[horizon] = valid
 
     model_rows = pd.concat(validation_rows, ignore_index=True)
     model_summary = _accuracy_rows(model_rows, ["horizon_minutes"], prediction_column="prediction")
@@ -237,10 +292,48 @@ def train_and_validate(
     ).sort_values(["method", "horizon_minutes"])
     print(comparison.to_string(index=False, formatters={"accuracy": "{:.4f}".format}))
 
-    baseline_means = baseline_summary.groupby("method")["accuracy"].mean()
-    best_baseline = float(baseline_means.max())
-    model_accuracy = float(model_summary["accuracy"].mean())
-    return models, comparison, model_accuracy, best_baseline, feature_columns, train_cutoff, smoke_inputs
+    best_baseline = float(baseline_official["accuracy"].max())
+    validation_frame = model_rows[["station_id", "target_at", "actual", "prediction"]]
+    model_accuracy = official_accuracy(
+        validation_frame[["station_id", "target_at", "actual"]].rename(columns={"actual": "value"}),
+        validation_frame[["station_id", "target_at", "prediction"]].rename(columns={"prediction": "value"}),
+    )
+    print("Accuracy oficial agrupada en los ciclos de validación: " f"{model_accuracy:.4f}")
+    print("Accuracy oficial del mejor baseline: " f"{best_baseline:.4f}")
+
+    # Tras medir fuera de muestra, reentrenamos los artefactos de producción
+    # con todo el histórico disponible. La validación anterior sigue intacta.
+    data_cutoff = pd.Timestamp(prepared["target_at"].max())
+    production_models: dict[int, Any] = {}
+    production_smoke_inputs: dict[int, pd.DataFrame] = {}
+    for horizon in HORIZONS:
+        production_train = feature_rows(
+            prepared,
+            horizon_minutes=horizon,
+            max_origin=data_cutoff - horizon * FREQUENCY,
+        )
+        if production_train.empty:
+            raise ValueError(f"No hay datos de producción para horizonte +{horizon}")
+        production_matrix, production_columns = encode_features(production_train)
+        production_models[horizon] = train_lightgbm(
+            production_matrix,
+            production_train["actual"],
+            sample_weight=station_balance_weights(production_train),
+        )
+        production_smoke_inputs[horizon] = production_matrix.iloc[[-1]]
+        if production_columns != feature_columns:
+            raise RuntimeError("Las columnas de features cambian entre horizontes")
+
+    return (
+        production_models,
+        comparison,
+        model_accuracy,
+        best_baseline,
+        feature_columns,
+        data_cutoff,
+        production_smoke_inputs,
+        validation_features,
+    )
 
 
 def artifact_bytes(models: dict[int, Any], feature_columns: list[str], metadata: dict[str, Any]) -> bytes:
@@ -288,16 +381,53 @@ def train_and_register(
     test_origins: int = 96,
 ) -> dict[str, Any]:
     db = db or SupabaseDB()
-    models, comparison, model_accuracy, best_baseline, feature_columns, data_cutoff, smoke_inputs = train_and_validate(
-        observations, test_origins=test_origins
-    )
+    (
+        models,
+        comparison,
+        model_accuracy,
+        best_baseline,
+        feature_columns,
+        data_cutoff,
+        smoke_inputs,
+        validation_features,
+    ) = train_and_validate(observations, test_origins=test_origins)
     smoke_predictions = [models[horizon].predict(smoke_inputs[horizon]) for horizon in HORIZONS]
     smoke_ok = all(
-        len(prediction) == 1 and bool(pd.notna(prediction[0]))
+        len(prediction) == 1 and bool(np.isfinite(prediction[0])) and prediction[0] >= 0
         for prediction in smoke_predictions
     )
     if not smoke_ok:
         raise RuntimeError("La inferencia de prueba no produjo exactamente una predicción")
+
+    current_champion_response = (
+        db.client.table("model_versions")
+        .select("version,metric,artifact_path")
+        .eq("status", "champion")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    current_champion = current_champion_response.data[0] if current_champion_response.data else None
+    champion_same_window_accuracy: float | None = None
+    champion_evaluation_error: str | None = None
+    if current_champion:
+        try:
+            import joblib
+
+            champion_bucket, champion_path = current_champion["artifact_path"].split("/", 1)
+            champion_artifact = joblib.load(
+                io.BytesIO(db.download_artifact(champion_bucket, champion_path))
+            )
+            champion_same_window_accuracy = artifact_validation_accuracy(
+                champion_artifact, validation_features
+            )
+        except Exception as exc:
+            champion_evaluation_error = str(exc)[:1000]
+            print(
+                "No se pudo evaluar el champion en el mismo corte; "
+                "el candidato se guardará sin promover: "
+                f"{champion_evaluation_error}"
+            )
 
     commit = git_commit()
     commit_label = (commit or "nogit")[:12]
@@ -307,6 +437,9 @@ def train_and_register(
         "horizons_minutes": list(HORIZONS),
         "validation_accuracy": model_accuracy,
         "best_baseline_accuracy": best_baseline,
+        "champion_same_window_accuracy": champion_same_window_accuracy,
+        "validation_cycles": test_origins,
+        "validation_metric": "official_unweighted_station_wape_hourly_cycles",
         "smoke_inference": smoke_ok,
     }
     db.upload_artifact(bucket, artifact_path, artifact_bytes(models, feature_columns, metadata))
@@ -323,26 +456,15 @@ def train_and_register(
         },
     )
 
-    current_champion_response = (
-        db.client.table("model_versions")
-        .select("version,metric")
-        .eq("status", "champion")
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    current_champion = current_champion_response.data[0] if current_champion_response.data else None
-    current_champion_metric = (
-        float(current_champion["metric"])
-        if current_champion and current_champion.get("metric") is not None
-        else None
-    )
     promotion_reference = max(
         MIN_PROMOTION_ACCURACY,
         best_baseline,
-        current_champion_metric or float("-inf"),
     )
-    promoted = model_accuracy > promotion_reference and smoke_ok
+    beats_champion = current_champion is None or (
+        champion_same_window_accuracy is not None
+        and model_accuracy >= champion_same_window_accuracy + MIN_PROMOTION_MARGIN
+    )
+    promoted = model_accuracy > promotion_reference and beats_champion and smoke_ok
     if promoted:
         previous_version = current_champion["version"] if current_champion else None
         event_rows = db.insert(
@@ -351,11 +473,13 @@ def train_and_register(
                 "requested_version": version,
                 "previous_version": previous_version,
                 "action": "promotion",
-                "reason": "superó al mejor baseline, al champion vigente y pasó la inferencia de prueba",
+                "reason": "superó 85%, al mejor baseline y al champion en ciclos horarios idénticos; pasó inferencia de prueba",
                 "status": "pending",
                 "verification": {
                     "validation_accuracy": model_accuracy,
                     "best_baseline_accuracy": best_baseline,
+                    "champion_same_window_accuracy": champion_same_window_accuracy,
+                    "promotion_margin": MIN_PROMOTION_MARGIN,
                     "smoke_inference": smoke_ok,
                 },
             },
@@ -395,6 +519,7 @@ def train_and_register(
     print(
         f"Modelo: {version} | accuracy={model_accuracy:.4f} | "
         f"umbral_promoción={promotion_reference:.4f} | "
+        f"champion_mismo_corte={champion_same_window_accuracy} | "
         f"status={'champion' if promoted else 'candidate'}"
     )
     return {"version": version, "comparison": comparison, "promoted": promoted, "artifact_path": artifact_path}
