@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from .api_client import PulsoTransmiClient
+from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .db import SupabaseDB
 
 
@@ -71,9 +71,29 @@ def collect_once(
         before_count = db.observation_count()
         pages = 0
         rows_processed = 0
+        cursor_reset = False
 
         while True:
-            page = api.stream_observations(cursor=checkpoint, limit=batch_size)
+            try:
+                page = api.stream_observations(cursor=checkpoint, limit=batch_size)
+            except PulsoTransmiError as exc:
+                detail = exc.detail if isinstance(exc.detail, Mapping) else {}
+                nested_detail = detail.get("detail")
+                if isinstance(nested_detail, Mapping):
+                    detail = nested_detail
+                if (
+                    not cursor_reset
+                    and checkpoint is not None
+                    and exc.status_code == 400
+                    and detail.get("code") == "invalid_cursor"
+                ):
+                    # El API puede expirar/rechazar checkpoints antiguos. El
+                    # stream completo es seguro de releer porque el upsert usa
+                    # (station_id, ts); el cursor nuevo solo se confirma al final.
+                    checkpoint = None
+                    cursor_reset = True
+                    continue
+                raise
             raw_rows = list(page.get("data") or [])
             rows = normalize_observations(raw_rows)
             if rows:
@@ -103,6 +123,7 @@ def collect_once(
             "rows_new": rows_new,
             "pages": pages,
             "cursor": checkpoint,
+            "cursor_reset": cursor_reset,
         }
     except Exception as exc:
         try:
