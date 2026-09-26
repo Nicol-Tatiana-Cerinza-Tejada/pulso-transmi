@@ -75,6 +75,26 @@ def latest_value_at_or_before(series: pd.Series, timestamp: pd.Timestamp, *, sta
     return float(available.iloc[-1])
 
 
+def routed_baseline_value(
+    history: pd.DataFrame,
+    station_id: str,
+    target_at: pd.Timestamp,
+    cutoff: pd.Timestamp,
+    method: str,
+) -> float:
+    series = history[history["station_id"].astype(str) == station_id].set_index("ts")["value"].sort_index()
+    available = series[series.index <= cutoff]
+    if available.empty:
+        return 0.0
+    if method == "seasonal_naive":
+        seasonal = series.get(target_at - pd.Timedelta(days=7))
+        if seasonal is not None and math.isfinite(float(seasonal)):
+            return max(0.0, float(seasonal))
+    if method == "moving_average":
+        return max(0.0, float(available.tail(4).mean()))
+    return max(0.0, float(available.iloc[-1]))
+
+
 def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], cutoff: pd.Timestamp) -> tuple[pd.DataFrame, dict[int, list[int]]]:
     """Construye una fila por target usando únicamente history <= cutoff."""
     history = history[history["ts"] <= cutoff].copy()
@@ -206,6 +226,16 @@ def run_inference(
         matrix, _ = encode_features(target_features.iloc[indexes], artifact["feature_columns"])
         values = np.asarray(artifact["models"][horizon].predict(matrix), dtype=float)
         for index, value in zip(indexes, values, strict=True):
+            station_id = str(targets[index]["station_id"])
+            route = artifact.get("metadata", {}).get("station_routes", {}).get(station_id, {}).get(str(horizon), "lightgbm")
+            if route != "lightgbm":
+                value = routed_baseline_value(
+                    history,
+                    station_id,
+                    utc(targets[index]["target_at"]),
+                    cutoff,
+                    route,
+                )
             if not math.isfinite(float(value)):
                 raise RuntimeError(f"Predicción no finita para target {targets[index]}")
             predictions[index] = {

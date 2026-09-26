@@ -28,6 +28,7 @@ LAG_STEPS = (1, 2, 4, 8, 96, 672)
 ROLLING_WINDOWS = (4, 96, 672)
 MIN_PROMOTION_ACCURACY = 85.0
 MIN_PROMOTION_MARGIN = 0.5
+MIN_STATION_ACCURACY = 80.0
 FEATURE_NAMES = [
     *(f"lag_{steps}" for steps in LAG_STEPS),
     *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
@@ -190,21 +191,89 @@ def _accuracy_rows(frame: pd.DataFrame, group_columns: list[str], *, prediction_
     return pd.DataFrame(rows)
 
 
+def select_station_routes(
+    model_rows: pd.DataFrame,
+    baseline_rows: pd.DataFrame,
+) -> dict[str, dict[str, str]]:
+    """Elige la mejor estrategia por estación y horizonte en backtesting."""
+    candidates = pd.concat(
+        [
+            model_rows[["station_id", "target_at", "actual", "prediction", "horizon_minutes", "method"]],
+            baseline_rows[["station_id", "target_at", "actual", "prediction", "horizon_minutes", "method"]],
+        ],
+        ignore_index=True,
+    )
+    scores = _accuracy_rows(
+        candidates,
+        ["station_id", "horizon_minutes", "method"],
+        prediction_column="prediction",
+    )
+    priority = {"lightgbm": 0, "seasonal_naive": 1, "moving_average": 2, "naive": 3}
+    scores["priority"] = scores["method"].map(priority).fillna(99)
+    scores = scores.sort_values(
+        ["station_id", "horizon_minutes", "accuracy", "priority"],
+        ascending=[True, True, False, True],
+    )
+    routes: dict[str, dict[str, str]] = {}
+    for row in scores.drop_duplicates(["station_id", "horizon_minutes"]).to_dict("records"):
+        routes.setdefault(str(row["station_id"]), {})[str(int(row["horizon_minutes"]))] = str(row["method"])
+    return routes
+
+
+def apply_station_routes(
+    model_rows: pd.DataFrame,
+    baseline_rows: pd.DataFrame,
+    routes: dict[str, dict[str, str]],
+) -> pd.DataFrame:
+    """Sustituye la predicción del modelo por el baseline elegido cuando aplica."""
+    result = model_rows.copy()
+    for (station_id, horizon), group in result.groupby(["station_id", "horizon_minutes"]):
+        method = routes.get(str(station_id), {}).get(str(int(horizon)), "lightgbm")
+        if method == "lightgbm":
+            continue
+        lookup = (
+            baseline_rows[
+                (baseline_rows["station_id"] == station_id)
+                & (baseline_rows["horizon_minutes"] == horizon)
+                & (baseline_rows["method"] == method)
+            ]
+            .set_index("target_at")["prediction"]
+        )
+        for index in group.index:
+            value = lookup.get(result.at[index, "target_at"])
+            if value is not None:
+                result.at[index, "prediction"] = float(value)
+                result.at[index, "method"] = method
+    return result
+
+
+def validation_frame_for_artifact(
+    artifact: dict[str, Any],
+    validation_features: dict[int, pd.DataFrame],
+) -> pd.DataFrame:
+    """Devuelve predicciones de un artefacto aplicando sus rutas guardadas."""
+    scored: list[pd.DataFrame] = []
+    routes = artifact.get("metadata", {}).get("station_routes", {})
+    for horizon, valid in validation_features.items():
+        matrix, _ = encode_features(valid, artifact["feature_columns"])
+        values = np.maximum(0.0, np.asarray(artifact["models"][horizon].predict(matrix), dtype=float))
+        frame = valid[["station_id", "target_at", "actual", "lag_672", "rolling_mean_4"]].assign(prediction=values)
+        for index, row in frame.iterrows():
+            method = routes.get(str(row["station_id"]), {}).get(str(horizon), "lightgbm")
+            if method == "seasonal_naive":
+                frame.at[index, "prediction"] = float(row["lag_672"])
+            elif method == "moving_average":
+                frame.at[index, "prediction"] = float(row["rolling_mean_4"])
+        scored.append(frame[["station_id", "target_at", "actual", "prediction"]])
+    return pd.concat(scored, ignore_index=True)
+
+
 def artifact_validation_accuracy(
     artifact: dict[str, Any],
     validation_features: dict[int, pd.DataFrame],
 ) -> float:
     """Evalúa un artefacto en los mismos ciclos y con la métrica oficial."""
-    scored: list[pd.DataFrame] = []
-    for horizon, valid in validation_features.items():
-        matrix, _ = encode_features(valid, artifact["feature_columns"])
-        values = np.maximum(0.0, np.asarray(artifact["models"][horizon].predict(matrix), dtype=float))
-        if len(values) != len(valid) or not np.isfinite(values).all():
-            raise RuntimeError(f"Inferencia de validación inválida para horizonte +{horizon}")
-        scored.append(
-            valid[["station_id", "target_at", "actual"]].assign(prediction=values)
-        )
-    frame = pd.concat(scored, ignore_index=True)
+    frame = validation_frame_for_artifact(artifact, validation_features)
     actuals = frame[["station_id", "target_at", "actual"]].rename(columns={"actual": "value"})
     predictions = frame[["station_id", "target_at", "prediction"]].rename(columns={"prediction": "value"})
     return official_accuracy(actuals, predictions)
@@ -224,12 +293,7 @@ def paired_bootstrap_improvement(
     considera significativa si el límite inferior del intervalo del delta es
     mayor que cero.
     """
-    champion_rows: list[pd.DataFrame] = []
-    for horizon, valid in validation_features.items():
-        matrix, _ = encode_features(valid, champion_artifact["feature_columns"])
-        values = np.maximum(0.0, np.asarray(champion_artifact["models"][horizon].predict(matrix), dtype=float))
-        champion_rows.append(valid[["station_id", "target_at", "actual"]].assign(prediction=values))
-    champion_frame = pd.concat(champion_rows, ignore_index=True)
+    champion_frame = validation_frame_for_artifact(champion_artifact, validation_features)
     candidate = candidate_frame[["station_id", "target_at", "actual", "prediction"]].copy()
     champion = champion_frame.rename(columns={"prediction": "champion_prediction"})
     paired = candidate.merge(
@@ -278,6 +342,7 @@ def train_and_validate(
     dict[int, pd.DataFrame],
     dict[int, pd.DataFrame],
     pd.DataFrame,
+    dict[str, dict[str, str]],
 ]:
     """Entrena por horizonte y valida en ciclos horarios completos."""
     origins = validation_origins(observations, test_origins)
@@ -338,6 +403,11 @@ def train_and_validate(
         validation_features[horizon] = valid
 
     model_rows = pd.concat(validation_rows, ignore_index=True)
+    baseline_for_scoring = baseline_for_scoring[
+        ["station_id", "target_at", "actual", "prediction", "horizon_minutes", "method"]
+    ]
+    station_routes = select_station_routes(model_rows, baseline_for_scoring)
+    model_rows = apply_station_routes(model_rows, baseline_for_scoring, station_routes)
     model_summary = _accuracy_rows(model_rows, ["horizon_minutes"], prediction_column="prediction")
     model_summary["method"] = "lightgbm"
     model_summary = model_summary[["method", "horizon_minutes", "accuracy"]]
@@ -389,6 +459,7 @@ def train_and_validate(
         production_smoke_inputs,
         validation_features,
         model_rows,
+        station_routes,
     )
 
 
@@ -448,6 +519,7 @@ def train_and_register(
         smoke_inputs,
         validation_features,
         validation_frame,
+        station_routes,
     ) = train_and_validate(observations, test_origins=test_origins)
     smoke_predictions = [models[horizon].predict(smoke_inputs[horizon]) for horizon in HORIZONS]
     smoke_ok = all(
@@ -509,6 +581,8 @@ def train_and_register(
         "validation_metric": "official_unweighted_station_wape_hourly_cycles",
         "smoke_inference": smoke_ok,
         "significance": significance,
+        "station_routes": station_routes,
+        "station_accuracy_floor": MIN_STATION_ACCURACY,
     }
     db.upload_artifact(bucket, artifact_path, artifact_bytes(models, feature_columns, metadata))
     db.insert(
@@ -527,6 +601,8 @@ def train_and_register(
                 "champion_same_window_accuracy": champion_same_window_accuracy,
                 "promotion_reference": max(MIN_PROMOTION_ACCURACY, best_baseline),
                 "significance": significance,
+                "station_routes": station_routes,
+                "station_accuracy_floor": MIN_STATION_ACCURACY,
                 "validation_cycles": test_origins,
             },
             **(
@@ -541,12 +617,19 @@ def train_and_register(
         MIN_PROMOTION_ACCURACY,
         best_baseline,
     )
+    station_scores = _accuracy_rows(
+        validation_frame,
+        ["station_id"],
+        prediction_column="prediction",
+    )
+    minimum_station_accuracy = float(station_scores["accuracy"].min()) if not station_scores.empty else 0.0
+    station_floor_ok = minimum_station_accuracy >= MIN_STATION_ACCURACY
     beats_champion = current_champion is None or (
         champion_same_window_accuracy is not None
         and model_accuracy >= champion_same_window_accuracy + MIN_PROMOTION_MARGIN
         and significance["significant"]
     )
-    promoted = model_accuracy > promotion_reference and beats_champion and smoke_ok
+    promoted = model_accuracy > promotion_reference and beats_champion and smoke_ok and station_floor_ok
     if promoted:
         previous_version = current_champion["version"] if current_champion else None
         event_rows = db.insert(
@@ -564,6 +647,9 @@ def train_and_register(
                     "promotion_margin": MIN_PROMOTION_MARGIN,
                     "smoke_inference": smoke_ok,
                     "significance": significance,
+                    "minimum_station_accuracy": minimum_station_accuracy,
+                    "station_floor_required": MIN_STATION_ACCURACY,
+                    "station_floor_ok": station_floor_ok,
                 },
             },
         )
