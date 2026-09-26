@@ -521,6 +521,14 @@ def train_and_register(
             "metric": model_accuracy,
             "artifact_path": f"{bucket}/{artifact_path}",
             "status": "candidate",
+            "training_metadata": {
+                "validation_accuracy": model_accuracy,
+                "best_baseline_accuracy": best_baseline,
+                "champion_same_window_accuracy": champion_same_window_accuracy,
+                "promotion_reference": max(MIN_PROMOTION_ACCURACY, best_baseline),
+                "significance": significance,
+                "validation_cycles": test_origins,
+            },
             **(
                 {"dataset_snapshot_id": dataset_snapshot["snapshot_id"]}
                 if dataset_snapshot

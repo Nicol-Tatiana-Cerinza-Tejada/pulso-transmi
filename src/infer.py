@@ -142,13 +142,20 @@ def existing_attempt(db: SupabaseDB, participant_id: str, cycle_id: str) -> dict
     return dict(response.data[0]) if response.data else None
 
 
-def save_predictions(db: SupabaseDB, cycle_id: str, model_version: str, predictions: list[dict[str, Any]]) -> None:
+def save_predictions(
+    db: SupabaseDB,
+    cycle_id: str,
+    model_version: str,
+    predictions: list[dict[str, Any]],
+    cutoff: pd.Timestamp,
+) -> None:
     rows = [
         {
             "cycle_id": cycle_id,
             "station_id": item["station_id"],
             "target_at": utc(item["target_at"]).isoformat(),
             "value": item["value"],
+            "horizon_minutes": int((utc(item["target_at"]) - cutoff).total_seconds() // 60),
             "model_version": model_version,
             "submission_id": None,
         }
@@ -254,7 +261,7 @@ def run_inference(
                 "status": "pending",
             },
         )
-    save_predictions(db, cycle_id, model, final_predictions)
+    save_predictions(db, cycle_id, model, final_predictions, cutoff)
 
     receipt = api.create_submission(payload, idempotency_key=key)
     submission_id = receipt.get("submission_id")

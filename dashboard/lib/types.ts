@@ -21,6 +21,58 @@ export type AccuracyByStation = {
   cycle_rank: number;
 };
 
+export type AccuracyByHorizon = {
+  cycle_id: string;
+  station_id: string;
+  horizon_minutes: 15 | 30 | 45 | 60;
+  accuracy: number | null;
+  wape: number | null;
+  actuals_count: number | null;
+  cycle_rank: number;
+};
+
+export type RecentDemand = {
+  station_id: string;
+  ts: string;
+  value: number;
+  released_at: string | null;
+};
+
+export type PipelineHealth = {
+  latest_observation_at: string | null;
+  latest_collector_finished_at: string | null;
+  latest_collector_status: string | null;
+  latest_collector_rows: number | null;
+  latest_collector_error: string | null;
+  observation_delay_seconds: number | null;
+};
+
+export type SnapshotHistory = {
+  snapshot_id: string;
+  created_at: string;
+  sha256: string;
+  row_count: number;
+  station_count: number;
+  data_start: string;
+  data_end: string;
+  model_version: string | null;
+  model_status: string | null;
+  validation_metric: number | null;
+};
+
+export type RetrainHistory = {
+  version: string;
+  created_at: string;
+  model_status: string;
+  validation_metric: number | null;
+  data_cutoff: string;
+  dataset_snapshot_id: string | null;
+  snapshot_sha256: string | null;
+  snapshot_row_count: number | null;
+  decision: string;
+  training_metadata: { significance?: { significant?: boolean; confidence_low?: number; confidence_high?: number; delta_accuracy?: number } } | null;
+};
+
 export type Champion = {
   version: string;
   active_since: string;
@@ -84,6 +136,11 @@ export type LeaderboardSnapshot = {
 export type DashboardData = {
   timeline: AccuracyTimeline[];
   stationAccuracy: AccuracyByStation[];
+  horizonAccuracy: AccuracyByHorizon[];
+  recentDemand: RecentDemand[];
+  pipelineHealth: PipelineHealth[];
+  snapshots: SnapshotHistory[];
+  retrainHistory: RetrainHistory[];
   champion: Champion[];
   modelHistory: ModelHistory[];
   driftSignals: DriftSignal[];

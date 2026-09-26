@@ -37,6 +37,7 @@ alter table drift_signals enable row level security;
 alter table submission_receipts enable row level security;
 alter table model_promotion_events enable row level security;
 alter table leaderboard_snapshots enable row level security;
+alter table dataset_snapshots enable row level security;
 
 -- Las vistas son SECURITY DEFINER y publican una proyección explícita. Estas
 -- policies dejan documentado el acceso server-side de los jobs sin abrir las
@@ -48,7 +49,7 @@ begin
     foreach table_name in array array[
         'stations', 'observations', 'collector_runs', 'model_versions',
         'predictions', 'actuals', 'metrics', 'drift_signals',
-        'submission_receipts', 'model_promotion_events', 'leaderboard_snapshots'
+        'submission_receipts', 'model_promotion_events', 'leaderboard_snapshots', 'dataset_snapshots'
     ] loop
         execute format('drop policy if exists %I on public.%I', table_name || '_service_role_select', table_name);
         execute format(
@@ -109,6 +110,115 @@ select * from ranked where cycle_rank <= 12;
 
 comment on view public.v_accuracy_by_station is
     'Accuracy por estación limitada a los últimos 12 ciclos disponibles.';
+
+create or replace view public.v_accuracy_by_horizon as
+with scored as (
+    select
+        p.cycle_id,
+        p.station_id,
+        p.horizon_minutes,
+        p.target_at,
+        a.value as actual,
+        p.value as prediction
+    from public.predictions p
+    join public.actuals a
+      on a.cycle_id = p.cycle_id
+     and a.station_id = p.station_id
+     and a.target_at = p.target_at
+    where p.horizon_minutes in (15, 30, 45, 60)
+), grouped as (
+    select
+        cycle_id,
+        station_id,
+        horizon_minutes,
+        sum(abs(actual - prediction))::numeric / nullif(sum(actual), 0) as wape,
+        count(*)::integer as actuals_count
+    from scored
+    group by cycle_id, station_id, horizon_minutes
+)
+select
+    cycle_id,
+    station_id,
+    horizon_minutes,
+    case when wape is null then 0 else greatest(0, 100 * (1 - wape)) end::numeric(7, 4) as accuracy,
+    wape::numeric(12, 6) as wape,
+    actuals_count,
+    row_number() over (partition by station_id, horizon_minutes order by cycle_id desc)::integer as cycle_rank
+from grouped;
+
+comment on view public.v_accuracy_by_horizon is
+    'Accuracy por estación y horizonte calculada sobre targets revelados.';
+
+create or replace view public.v_demand_recent as
+with bounds as (select max(ts) as latest_ts from public.observations)
+select o.station_id, o.ts, o.value, o.released_at
+from public.observations o cross join bounds b
+where o.ts >= b.latest_ts - interval '24 hours'
+order by o.ts, o.station_id;
+
+comment on view public.v_demand_recent is
+    'Demanda observada de las últimas 24 horas disponibles para el gráfico operativo.';
+
+create or replace view public.v_pipeline_health as
+with latest_observation as (
+    select max(ts) as latest_observation_at from public.observations
+), latest_collector as (
+    select finished_at, status, rows_new, error
+    from public.collector_runs
+    order by started_at desc, id desc
+    limit 1
+)
+select
+    latest_observation_at,
+    latest_collector.finished_at as latest_collector_finished_at,
+    latest_collector.status as latest_collector_status,
+    latest_collector.rows_new as latest_collector_rows,
+    latest_collector.error as latest_collector_error,
+    extract(epoch from (now() - latest_observation_at))::bigint as observation_delay_seconds
+from latest_observation cross join latest_collector;
+
+create or replace view public.v_snapshot_history as
+select
+    s.snapshot_id,
+    s.created_at,
+    s.sha256,
+    s.row_count,
+    s.station_count,
+    s.data_start,
+    s.data_end,
+    s.artifact_path,
+    m.version as model_version,
+    m.status as model_status,
+    m.metric as validation_metric,
+    m.training_metadata
+from public.dataset_snapshots s
+left join public.model_versions m on m.dataset_snapshot_id = s.snapshot_id;
+
+comment on view public.v_snapshot_history is
+    'Snapshots de dataset y modelos candidatos/champion asociados, sin exponer artefactos privados.';
+
+create or replace view public.v_retrain_history as
+select
+    m.version,
+    m.created_at,
+    m.status as model_status,
+    m.metric as validation_metric,
+    m.data_cutoff,
+    m.git_commit,
+    m.dataset_snapshot_id,
+    s.sha256 as snapshot_sha256,
+    s.row_count as snapshot_row_count,
+    s.created_at as snapshot_created_at,
+    m.training_metadata,
+    case
+        when m.status = 'champion' then 'promoted'
+        when coalesce((m.training_metadata->'significance'->>'significant')::boolean, false)
+            then 'rejected_by_promotion_rule'
+        else 'not_significant'
+    end as decision
+from public.model_versions m
+left join public.dataset_snapshots s on s.snapshot_id = m.dataset_snapshot_id
+order by m.created_at desc;
 
 create or replace view public.v_champion_current as
 select
@@ -247,5 +357,10 @@ grant select on public.v_model_history to anon, authenticated;
 grant select on public.v_drift_signals to anon, authenticated;
 grant select on public.v_pipeline_runs to anon, authenticated;
 grant select on public.v_leaderboard_snapshot to anon, authenticated;
+grant select on public.v_accuracy_by_horizon to anon, authenticated;
+grant select on public.v_demand_recent to anon, authenticated;
+grant select on public.v_pipeline_health to anon, authenticated;
+grant select on public.v_snapshot_history to anon, authenticated;
+grant select on public.v_retrain_history to anon, authenticated;
 
 commit;

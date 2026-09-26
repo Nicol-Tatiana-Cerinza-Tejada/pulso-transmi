@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
+  Area,
+  AreaChart,
   CartesianGrid,
   Cell,
   LabelList,
@@ -22,6 +24,11 @@ import type { DashboardData, PipelineRun } from "@/lib/types";
 const emptyData: DashboardData = {
   timeline: [],
   stationAccuracy: [],
+  horizonAccuracy: [],
+  recentDemand: [],
+  pipelineHealth: [],
+  snapshots: [],
+  retrainHistory: [],
   champion: [],
   modelHistory: [],
   driftSignals: [],
@@ -42,6 +49,11 @@ const fmtShortDate = (value: string | number) =>
 const pct = (value?: number | null) => (value === null || value === undefined ? "—" : `${value.toFixed(2)}%`);
 const chartPercent = (value: unknown, decimals = 2) => `${Number(value).toFixed(decimals)}%`;
 const chartTickPercent = (value: unknown) => `${value}%`;
+const fmtDelay = (seconds?: number | null) => {
+  if (seconds === null || seconds === undefined) return "—";
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+};
 
 function EmptyState({ children = "Sin datos aún: el stream se llenará cuando se active la competencia." }) {
   return <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 p-8 text-center text-sm text-slate-500">{children}</div>;
@@ -139,6 +151,34 @@ export default function Dashboard() {
       .sort((a, b) => a.accuracy - b.accuracy);
   }, [data.stationAccuracy]);
 
+  const demandChart = useMemo(() => {
+    const grouped = new Map<string, { time: number; demand: number; count: number }>();
+    for (const row of data.recentDemand) {
+      const current = grouped.get(row.ts) ?? { time: Date.parse(row.ts), demand: 0, count: 0 };
+      current.demand += row.value;
+      current.count += 1;
+      grouped.set(row.ts, current);
+    }
+    return [...grouped.values()].map((row) => ({ ...row, demand: row.demand / row.count }));
+  }, [data.recentDemand]);
+
+  const horizonBars = useMemo(() => {
+    const latest = new Map<number, number[]>();
+    for (const row of data.horizonAccuracy) {
+      if (row.cycle_rank !== 1 || row.accuracy === null) continue;
+      latest.set(row.horizon_minutes, [...(latest.get(row.horizon_minutes) ?? []), row.accuracy]);
+    }
+    return [15, 30, 45, 60].map((horizon) => {
+      const values = latest.get(horizon) ?? [];
+      return { horizon: `+${horizon} min`, accuracy: values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0 };
+    });
+  }, [data.horizonAccuracy]);
+
+  const latestSnapshot = data.snapshots[0];
+  const latestRetrain = data.retrainHistory[0];
+  const pipelineHealth = data.pipelineHealth[0];
+  const weakStations = stationBars.filter((station) => station.accuracy < 87);
+
   const championMarkers = data.modelHistory
     .filter((event) => event.status === "succeeded")
     .map((event) => ({ at: event.created_at, version: event.version }));
@@ -175,6 +215,20 @@ export default function Dashboard() {
           <div className="rounded-2xl bg-white p-5 shadow-soft"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Estado del pipeline</p><div className="mt-4"><PipelineSummary runs={data.pipelineRuns} /></div><p className="mt-4 text-xs text-slate-400">{lastUpdated ? `Consultado ${fmtDate(lastUpdated.toISOString())}` : "Sin consulta"}</p></div>
         </section>
 
+        <div className="mt-10 grid gap-8 lg:grid-cols-2">
+          <Section eyebrow="Demanda · últimas 24 h" title="¿Cómo se está comportando la demanda reciente?">
+            <div className="rounded-2xl bg-white p-4 shadow-soft sm:p-6">
+              {demandChart.length === 0 ? <EmptyState /> : <div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><AreaChart data={demandChart}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" /><XAxis dataKey="time" type="number" domain={["dataMin", "dataMax"]} tickFormatter={fmtShortDate} stroke="#64748b" fontSize={11} /><YAxis stroke="#64748b" fontSize={11} /><Tooltip labelFormatter={(value: unknown) => fmtDate(new Date(Number(value)).toISOString())} formatter={(value: unknown) => [Number(value).toFixed(1), "Demanda media"]} /><Area type="monotone" dataKey="demand" stroke="#0f766e" fill="#99f6e4" fillOpacity={0.55} /></AreaChart></ResponsiveContainer></div>}
+              <p className="mt-3 text-xs text-slate-500">Promedio de demanda entre las estaciones observadas en cada timestamp.</p>
+            </div>
+          </Section>
+          <Section eyebrow="Horizontes" title="¿En qué horizonte pierde accuracy el modelo?">
+            <div className="rounded-2xl bg-white p-4 shadow-soft sm:p-6">
+              {data.horizonAccuracy.length === 0 ? <EmptyState /> : <div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><BarChart data={horizonBars}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" /><XAxis dataKey="horizon" stroke="#64748b" fontSize={11} /><YAxis domain={[0, 100]} tickFormatter={chartTickPercent} stroke="#64748b" fontSize={11} /><Tooltip formatter={(value: unknown) => [chartPercent(value), "Accuracy"]} /><ReferenceLine y={87} stroke="#ef6f61" strokeDasharray="5 5" label="objetivo 87%" /><Bar dataKey="accuracy" fill="#0f766e" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer></div>}
+            </div>
+          </Section>
+        </div>
+
         <div className="mt-10">
           <Section eyebrow="Pregunta 1 · estabilidad" title="¿La accuracy está cayendo con el tiempo?">
             <div className="rounded-2xl bg-white p-4 shadow-soft sm:p-6">
@@ -185,13 +239,29 @@ export default function Dashboard() {
           <Section eyebrow="Pregunta 2 · estaciones" title="¿Qué estaciones necesitan más atención?">
             <div className="rounded-2xl bg-white p-4 shadow-soft sm:p-6">
               {stationBars.length === 0 ? <EmptyState /> : <div className="h-[380px] w-full"><ResponsiveContainer width="100%" height="100%"><BarChart layout="vertical" data={stationBars} margin={{ top: 8, right: 46, left: 18, bottom: 8 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" /><XAxis type="number" domain={[0, 100]} tickFormatter={chartTickPercent} stroke="#64748b" fontSize={11} /><YAxis type="category" dataKey="station_id" width={55} stroke="#64748b" fontSize={11} /><Tooltip formatter={(value: unknown) => [chartPercent(value), "Accuracy"]} /><Bar dataKey="accuracy" name="Accuracy" radius={[0, 8, 8, 0]}>{stationBars.map((station, index) => <Cell key={station.station_id} fill={index < 3 ? "#ef6f61" : "#0f766e"} />)}<LabelList dataKey="accuracy" position="right" formatter={(value: unknown) => chartPercent(value, 1)} fill="#475569" fontSize={11} /></Bar></BarChart></ResponsiveContainer></div>}
-              <p className="mt-3 text-xs text-slate-500">Ordenadas de peor a mejor; las primeras barras son las estaciones prioritarias.</p>
+              <p className="mt-3 text-xs text-slate-500">Objetivo: 87 %. {weakStations.length ? `${weakStations.length} estación(es) están por debajo del objetivo.` : "Todas las estaciones están en el objetivo."}</p>
             </div>
           </Section>
 
           <div className="grid gap-8 lg:grid-cols-2">
             <Section eyebrow="Pregunta 3 · modelo" title="¿Qué champion está produciendo las predicciones?"><div className="rounded-2xl bg-white p-6 shadow-soft">{latestChampion ? <dl className="grid gap-4 sm:grid-cols-2">{[["Versión", latestChampion.version], ["Activo desde", fmtDate(latestChampion.active_since)], ["Data cutoff", fmtDate(latestChampion.data_cutoff)], ["Métrica validación", pct(latestChampion.validation_metric)], ["Commit", latestChampion.git_commit?.slice(0, 12) ?? "No registrado"]].map(([label, value]) => <div key={label}><dt className="text-xs font-bold uppercase tracking-wider text-slate-500">{label}</dt><dd className="mt-1 break-all text-sm font-semibold text-ink">{value}</dd></div>)}</dl> : <EmptyState>Sin champion registrado todavía.</EmptyState>}</div></Section>
             <Section eyebrow="Pregunta 4 · drift" title="¿Hay señales abiertas que requieran acción?"><div className="rounded-2xl bg-white p-6 shadow-soft">{data.driftSignals.length === 0 ? <EmptyState>Sin señales abiertas.</EmptyState> : <div className="space-y-3">{data.driftSignals.map((signal) => <div key={signal.id} className="flex items-center justify-between gap-4 rounded-xl border border-slate-100 p-3"><div><p className="font-bold capitalize text-ink">{signal.signal_type.replaceAll("_", " ")}</p><p className="text-xs text-slate-500">{signal.station_id ? `Estación ${signal.station_id} · ` : "Global · "}{fmtDate(signal.detected_at)}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold uppercase ${signal.severity === "critical" || signal.severity === "high" ? "bg-red-100 text-red-700" : signal.severity === "medium" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>{signal.severity}</span></div>)}</div>}</div></Section>
+          </div>
+
+          <div className="grid gap-8 lg:grid-cols-3">
+            <Section eyebrow="Dataset" title="Snapshot utilizado">
+              <div className="rounded-2xl bg-white p-6 shadow-soft">
+                {latestSnapshot ? <dl className="space-y-3 text-sm"><div><dt className="text-xs font-bold uppercase text-slate-500">ID</dt><dd className="break-all font-mono text-xs">{latestSnapshot.snapshot_id}</dd></div><div><dt className="text-xs font-bold uppercase text-slate-500">SHA-256</dt><dd className="break-all font-mono text-xs">{latestSnapshot.sha256}</dd></div><div><dt className="text-xs font-bold uppercase text-slate-500">Filas / estaciones</dt><dd>{latestSnapshot.row_count.toLocaleString()} / {latestSnapshot.station_count}</dd></div><div><dt className="text-xs font-bold uppercase text-slate-500">Creado</dt><dd>{fmtDate(latestSnapshot.created_at)}</dd></div></dl> : <EmptyState>No hay snapshots todavía.</EmptyState>}
+              </div>
+            </Section>
+            <Section eyebrow="Reentrenamiento" title="¿Qué decidió el pipeline?">
+              <div className="rounded-2xl bg-white p-6 shadow-soft">
+                {latestRetrain ? <><span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${latestRetrain.decision === "promoted" ? "bg-emerald-100 text-emerald-700" : latestRetrain.decision === "not_significant" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{latestRetrain.decision.replaceAll("_", " ")}</span><dl className="mt-4 space-y-2 text-sm"><div><dt className="text-xs font-bold uppercase text-slate-500">Modelo</dt><dd className="break-all font-mono text-xs">{latestRetrain.version}</dd></div><div><dt className="text-xs font-bold uppercase text-slate-500">Accuracy validación</dt><dd>{pct(latestRetrain.validation_metric)}</dd></div><div><dt className="text-xs font-bold uppercase text-slate-500">Delta bootstrap</dt><dd>{pct(latestRetrain.training_metadata?.significance?.delta_accuracy)}</dd></div></dl></> : <EmptyState>Sin reentrenamientos todavía.</EmptyState>}
+              </div>
+            </Section>
+            <Section eyebrow="Operación" title="Retraso del collector">
+              <div className="rounded-2xl bg-white p-6 shadow-soft"><p className="text-3xl font-bold text-ink">{fmtDelay(pipelineHealth?.observation_delay_seconds)}</p><p className="mt-2 text-sm text-slate-500">Desde la última observación disponible</p><p className="mt-4 text-xs text-slate-500">Estado: {pipelineHealth?.latest_collector_status ?? "sin datos"}</p><p className="text-xs text-slate-500">Última observación: {fmtDate(pipelineHealth?.latest_observation_at)}</p></div>
+            </Section>
           </div>
 
           <Section eyebrow="Pregunta 5 · operación" title="¿El pipeline está funcionando sin leer logs?"><div className="overflow-hidden rounded-2xl bg-white shadow-soft">{data.pipelineRuns.length === 0 ? <div className="p-6"><EmptyState /></div> : <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-5 py-4">Pipeline</th><th className="px-5 py-4">Ejecución</th><th className="px-5 py-4">Estado</th><th className="px-5 py-4">Filas</th><th className="px-5 py-4">Inicio</th><th className="px-5 py-4">Error</th></tr></thead><tbody className="divide-y divide-slate-100">{data.pipelineRuns.map((run) => <tr key={`${run.pipeline}-${run.run_id}`}><td className="px-5 py-4 font-bold capitalize">{run.pipeline}</td><td className="px-5 py-4 font-mono text-xs">{run.run_id}</td><td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClass(run.status)}`}>{run.status}</span></td><td className="px-5 py-4">{run.rows_processed ?? "—"}</td><td className="px-5 py-4 text-slate-500">{fmtDate(run.started_at)}</td><td className="max-w-xs truncate px-5 py-4 text-red-600">{run.error ?? "—"}</td></tr>)}</tbody></table></div>}</div></Section>

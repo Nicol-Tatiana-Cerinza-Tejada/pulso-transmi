@@ -10,6 +10,8 @@ exclusivamente las vistas públicas creadas por `sql/02_readonly_views.sql`:
 - `v_drift_signals`
 - `v_pipeline_runs`
 - `v_leaderboard_snapshot`
+- `v_accuracy_by_horizon`, `v_demand_recent`, `v_pipeline_health`
+- `v_snapshot_history`, `v_retrain_history`
 
 No se consulta ninguna tabla base. El cliente de Supabase usa solamente la
 publishable key; nunca agregues `SUPABASE_SERVICE_ROLE_KEY`,
@@ -29,8 +31,14 @@ npm run dev
 Abre <http://localhost:3000>.
 
 Antes, ejecuta en Supabase las migraciones del repositorio, especialmente
+`database/migrations/007_dataset_snapshots.sql`,
+`database/migrations/008_dashboard_observability.sql`,
 `sql/03_model_promotion_events.sql` y `sql/02_readonly_views.sql`. Las vistas
 deben tener `SELECT` para `anon` y las tablas base deben conservar RLS activo.
+
+La migración `008` también agrega el horizonte de cada predicción nueva. Las
+predicciones históricas anteriores a esa migración pueden aparecer sin datos en
+el gráfico por horizonte hasta que se generen nuevas entregas.
 
 ## Despliegue
 
