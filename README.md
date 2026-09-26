@@ -464,8 +464,11 @@ La publicación periódica se ejecuta en GitHub Actions (el `cron` usa UTC):
   abierta. También evalúa y monitorea.
 - `.github/workflows/collector.yml`: cada 30 minutos como respaldo de la
   recolección incremental.
-- `.github/workflows/train.yml`: una vez al día para validar y registrar el
-  modelo.
+- `.github/workflows/train.yml`: ejecución manual de compatibilidad para
+  validar y registrar el modelo.
+- `.github/workflows/snapshot-retrain.yml`: toma un snapshot inmutable,
+  reentrena, compara contra el champion en los mismos cortes y solo promueve si
+  la mejora es estadísticamente significativa.
 
 Para activarlo, en GitHub entra a `Settings > Secrets and variables > Actions` y
 crea `PULSO_API_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`. Después ve a
@@ -473,6 +476,12 @@ crea `PULSO_API_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`. Después ve 
 retrasarse algunos minutos; por eso el código consulta `/v1/clock` y
 `/v1/forecast-cycles/current`, y la misma entrega se protege con una clave de
 idempotencia.
+
+El snapshot-retrain requiere aplicar una vez la migración
+`database/migrations/007_dataset_snapshots.sql` en Supabase. Cada snapshot se
+guarda como CSV privado en el bucket `dataset-snapshots`, con SHA-256, rango
+temporal, número de filas y estaciones. El modelo queda relacionado con su
+`dataset_snapshot_id`.
 
 ### Disparo externo desde cron-job.org
 

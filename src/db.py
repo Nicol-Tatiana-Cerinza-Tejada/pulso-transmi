@@ -15,6 +15,8 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from supabase import Client
 
+from .local_env import load_local_env
+
 
 class SupabaseConfigurationError(RuntimeError):
     """La configuración mínima de Supabase no está disponible."""
@@ -35,6 +37,7 @@ def create_supabase_client(
     Se importa el SDK de forma diferida para que el resto del proyecto pueda
     cargarse sin Supabase instalado cuando no se ejecutan tareas de persistencia.
     """
+    load_local_env()
     supabase_url = url or os.getenv("SUPABASE_URL")
     supabase_key = (
         service_role_key

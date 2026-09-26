@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+from .local_env import load_local_env
+
 
 DEFAULT_BASE_URL = "https://pulso-transmi.72-60-245-2.sslip.io"
 RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
@@ -52,6 +54,7 @@ class PulsoTransmiClient:
         backoff_factor: float = 0.5,
         client: httpx.Client | None = None,
     ) -> None:
+        load_local_env()
         if max_retries < 0:
             raise ValueError("max_retries debe ser mayor o igual a cero")
         if backoff_factor < 0:

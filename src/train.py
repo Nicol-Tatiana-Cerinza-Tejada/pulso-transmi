@@ -21,7 +21,7 @@ from .baselines import (
     validation_cycle_origins,
 )
 from .db import SupabaseDB
-from .metrics import official_accuracy
+from .metrics import official_accuracy, station_metrics
 
 
 LAG_STEPS = (1, 2, 4, 8, 96, 672)
@@ -210,6 +210,60 @@ def artifact_validation_accuracy(
     return official_accuracy(actuals, predictions)
 
 
+def paired_bootstrap_improvement(
+    candidate_frame: pd.DataFrame,
+    champion_artifact: dict[str, Any],
+    validation_features: dict[int, pd.DataFrame],
+    *,
+    iterations: int = 2000,
+) -> dict[str, Any]:
+    """Estima si el candidato mejora al champion en las mismas estaciones.
+
+    Se remuestrean estaciones completas para respetar la métrica oficial, que
+    da el mismo peso a cada estación. Es una prueba conservadora: solo se
+    considera significativa si el límite inferior del intervalo del delta es
+    mayor que cero.
+    """
+    champion_rows: list[pd.DataFrame] = []
+    for horizon, valid in validation_features.items():
+        matrix, _ = encode_features(valid, champion_artifact["feature_columns"])
+        values = np.maximum(0.0, np.asarray(champion_artifact["models"][horizon].predict(matrix), dtype=float))
+        champion_rows.append(valid[["station_id", "target_at", "actual"]].assign(prediction=values))
+    champion_frame = pd.concat(champion_rows, ignore_index=True)
+    candidate = candidate_frame[["station_id", "target_at", "actual", "prediction"]].copy()
+    champion = champion_frame.rename(columns={"prediction": "champion_prediction"})
+    paired = candidate.merge(
+        champion[["station_id", "target_at", "champion_prediction"]],
+        on=["station_id", "target_at"],
+        validate="one_to_one",
+    )
+    candidate_metrics = station_metrics(paired.rename(columns={"prediction": "prediction"}))
+    champion_metrics = station_metrics(
+        paired.rename(columns={"champion_prediction": "prediction"})
+    )
+    station_scores = candidate_metrics[["station_id", "accuracy"]].merge(
+        champion_metrics[["station_id", "accuracy"]],
+        on="station_id",
+        suffixes=("_candidate", "_champion"),
+    )
+    delta = station_scores["accuracy_candidate"] - station_scores["accuracy_champion"]
+    rng = np.random.default_rng(42)
+    station_count = len(station_scores)
+    if station_count == 0:
+        raise RuntimeError("No hay estaciones para comparar candidate y champion")
+    samples = rng.integers(0, station_count, size=(iterations, station_count))
+    boot = delta.to_numpy()[samples].mean(axis=1)
+    low, high = np.quantile(boot, [0.025, 0.975])
+    return {
+        "delta_accuracy": float(delta.mean()),
+        "confidence_low": float(low),
+        "confidence_high": float(high),
+        "iterations": iterations,
+        "station_count": station_count,
+        "significant": bool(low > 0.0),
+    }
+
+
 def train_and_validate(
     observations: pd.DataFrame,
     *,
@@ -223,6 +277,7 @@ def train_and_validate(
     pd.Timestamp,
     dict[int, pd.DataFrame],
     dict[int, pd.DataFrame],
+    pd.DataFrame,
 ]:
     """Entrena por horizonte y valida en ciclos horarios completos."""
     origins = validation_origins(observations, test_origins)
@@ -333,6 +388,7 @@ def train_and_validate(
         data_cutoff,
         production_smoke_inputs,
         validation_features,
+        model_rows,
     )
 
 
@@ -379,6 +435,7 @@ def train_and_register(
     db: SupabaseDB | None = None,
     bucket: str = "model-artifacts",
     test_origins: int = 96,
+    dataset_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     db = db or SupabaseDB()
     (
@@ -390,6 +447,7 @@ def train_and_register(
         data_cutoff,
         smoke_inputs,
         validation_features,
+        validation_frame,
     ) = train_and_validate(observations, test_origins=test_origins)
     smoke_predictions = [models[horizon].predict(smoke_inputs[horizon]) for horizon in HORIZONS]
     smoke_ok = all(
@@ -410,6 +468,12 @@ def train_and_register(
     current_champion = current_champion_response.data[0] if current_champion_response.data else None
     champion_same_window_accuracy: float | None = None
     champion_evaluation_error: str | None = None
+    significance: dict[str, Any] = {
+        "significant": current_champion is None,
+        "delta_accuracy": None,
+        "confidence_low": None,
+        "confidence_high": None,
+    }
     if current_champion:
         try:
             import joblib
@@ -420,6 +484,9 @@ def train_and_register(
             )
             champion_same_window_accuracy = artifact_validation_accuracy(
                 champion_artifact, validation_features
+            )
+            significance = paired_bootstrap_improvement(
+                validation_frame, champion_artifact, validation_features
             )
         except Exception as exc:
             champion_evaluation_error = str(exc)[:1000]
@@ -441,6 +508,7 @@ def train_and_register(
         "validation_cycles": test_origins,
         "validation_metric": "official_unweighted_station_wape_hourly_cycles",
         "smoke_inference": smoke_ok,
+        "significance": significance,
     }
     db.upload_artifact(bucket, artifact_path, artifact_bytes(models, feature_columns, metadata))
     db.insert(
@@ -453,6 +521,11 @@ def train_and_register(
             "metric": model_accuracy,
             "artifact_path": f"{bucket}/{artifact_path}",
             "status": "candidate",
+            **(
+                {"dataset_snapshot_id": dataset_snapshot["snapshot_id"]}
+                if dataset_snapshot
+                else {}
+            ),
         },
     )
 
@@ -463,6 +536,7 @@ def train_and_register(
     beats_champion = current_champion is None or (
         champion_same_window_accuracy is not None
         and model_accuracy >= champion_same_window_accuracy + MIN_PROMOTION_MARGIN
+        and significance["significant"]
     )
     promoted = model_accuracy > promotion_reference and beats_champion and smoke_ok
     if promoted:
@@ -481,6 +555,7 @@ def train_and_register(
                     "champion_same_window_accuracy": champion_same_window_accuracy,
                     "promotion_margin": MIN_PROMOTION_MARGIN,
                     "smoke_inference": smoke_ok,
+                    "significance": significance,
                 },
             },
         )
