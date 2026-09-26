@@ -2,8 +2,8 @@ name: Snapshot, retrain and promote
 
 on:
   schedule:
-    # GitHub Actions usa UTC; se ejecuta diariamente después de la recolección.
-    - cron: "17 3 * * *"
+    # GitHub Actions usa UTC; revisa cada hora si la accuracy cayó >= 3 puntos.
+    - cron: "17 * * * *"
   workflow_dispatch:
   repository_dispatch:
     types: [snapshot-retrain]
@@ -52,4 +52,9 @@ jobs:
           exit 1
 
       - name: Snapshot, retrain and promote if significant
-        run: python -m src.retrain --origins 96
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            python -m src.retrain --origins 96 --only-if-regressed --drop-points 3
+          else
+            python -m src.retrain --origins 96
+          fi

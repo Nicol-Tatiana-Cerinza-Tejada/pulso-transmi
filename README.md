@@ -466,9 +466,10 @@ La publicación periódica se ejecuta en GitHub Actions (el `cron` usa UTC):
   recolección incremental.
 - `.github/workflows/train.yml`: ejecución manual de compatibilidad para
   validar y registrar el modelo.
-- `.github/workflows/snapshot-retrain.yml`: toma un snapshot inmutable,
-  reentrena, compara contra el champion en los mismos cortes y solo promueve si
-  la mejora es estadísticamente significativa.
+- `.github/workflows/snapshot-retrain.yml`: cada hora revisa la accuracy reciente;
+  si cae al menos 3 puntos frente a su referencia reciente o baja de 80 %, toma
+  un snapshot inmutable, reentrena, compara contra el champion en los mismos
+  cortes y solo promueve si la mejora es estadísticamente significativa.
 
 Para activarlo, en GitHub entra a `Settings > Secrets and variables > Actions` y
 crea `PULSO_API_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`. Después ve a
@@ -482,6 +483,11 @@ El snapshot-retrain requiere aplicar una vez la migración
 guarda como CSV privado en el bucket `dataset-snapshots`, con SHA-256, rango
 temporal, número de filas y estaciones. El modelo queda relacionado con su
 `dataset_snapshot_id`.
+
+El 92 % es un objetivo de calidad, no una garantía matemática: el pipeline no
+promueve un candidato solo por acercarse a ese número. También exige que la
+accuracy mínima por estación sea 80 %, para impedir que un promedio global
+oculte una estación con mal desempeño.
 
 ### Disparo externo desde cron-job.org
 
