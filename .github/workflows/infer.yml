@@ -42,7 +42,15 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-student.txt
 
       - name: Collect incremental observations
-        run: python -m src.collector
+        run: |
+          for attempt in 1 2 3; do
+            python -m src.collector --batch-size 250 && exit 0
+            if [ "$attempt" -lt 3 ]; then
+              echo "Collector temporalmente indisponible; reintentando en 20 s"
+              sleep 20
+            fi
+          done
+          exit 1
 
       - name: Generate and submit predictions
         run: python -m src.infer --bucket model-artifacts

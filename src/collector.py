@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -10,7 +11,10 @@ from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .db import SupabaseDB
 
 
-BATCH_SIZE = 1000
+# Páginas más pequeñas reducen los timeouts cuando el API libera mucho backlog.
+# Repetir una página es seguro: observations usa upsert y el cursor solo avanza
+# después de confirmar la escritura.
+BATCH_SIZE = 250
 
 
 def to_utc_iso(value: str) -> str:
@@ -142,9 +146,12 @@ def collect_once(
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    args = parser.parse_args()
     try:
         with PulsoTransmiClient() as api:
-            result = collect_once(api, SupabaseDB())
+            result = collect_once(api, SupabaseDB(), batch_size=args.batch_size)
         print(result)
         return 0 if result["status"] in {"succeeded", "waiting"} else 1
     except Exception as exc:
