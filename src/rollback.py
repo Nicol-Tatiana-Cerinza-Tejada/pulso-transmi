@@ -12,7 +12,7 @@ import pandas as pd
 
 from .db import SupabaseDB
 from .infer import build_target_features, load_observations_until
-from .train import encode_features
+from .train import encode_features, encode_station_features
 
 
 BUCKET = "model-artifacts"
@@ -91,16 +91,29 @@ def verify_artifact_and_inference(
     ]
     features, positions = build_target_features(history, targets, cutoff)
     values: list[float] = []
+    station_models = artifact.get("station_models", {})
+    station_feature_columns = artifact.get("station_feature_columns", {})
     for horizon in HORIZONS:
         indexes = positions.get(horizon, [])
         if len(indexes) != len(stations):
             raise RuntimeError(f"Faltan targets para el horizonte +{horizon}")
-        try:
-            model_object = artifact["models"][horizon]
-        except KeyError as exc:
-            raise RuntimeError(f"El artefacto no contiene el horizonte +{horizon}") from exc
-        matrix, _ = encode_features(features.iloc[indexes], artifact["feature_columns"])
-        predictions = model_object.predict(matrix)
+        if station_models:
+            predictions = []
+            for index in indexes:
+                station_id = str(targets[index]["station_id"])
+                model_object = station_models.get(station_id, {}).get(str(horizon))
+                columns = station_feature_columns.get(station_id, {}).get(str(horizon))
+                if model_object is None or columns is None:
+                    raise RuntimeError(f"El artefacto no contiene {station_id} +{horizon}")
+                matrix, _ = encode_station_features(features.iloc[[index]], columns)
+                predictions.append(float(model_object.predict(matrix)[0]))
+        else:
+            try:
+                model_object = artifact["models"][horizon]
+            except KeyError as exc:
+                raise RuntimeError(f"El artefacto no contiene el horizonte +{horizon}") from exc
+            matrix, _ = encode_features(features.iloc[indexes], artifact["feature_columns"])
+            predictions = model_object.predict(matrix)
         if len(predictions) != len(indexes):
             raise RuntimeError(f"Inferencia incompleta para el horizonte +{horizon}")
         for value in predictions:

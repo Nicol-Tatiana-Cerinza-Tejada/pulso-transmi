@@ -147,6 +147,27 @@ def encode_features(frame: pd.DataFrame, columns: list[str] | None = None) -> tu
     return matrix, list(matrix.columns)
 
 
+def encode_station_features(frame: pd.DataFrame, columns: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
+    """Codifica features para un modelo exclusivo de una estación."""
+    base_columns = [
+        *(f"lag_{steps}" for steps in LAG_STEPS),
+        *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
+        "rolling_std_96",
+        "trend_4_96",
+        "target_hour",
+        "target_weekday",
+        "target_hour_sin",
+        "target_hour_cos",
+        "target_weekday_sin",
+        "target_weekday_cos",
+    ]
+    matrix = frame[base_columns].copy()
+    if columns is not None:
+        matrix = matrix.reindex(columns=columns, fill_value=0.0)
+        return matrix, columns
+    return matrix, list(matrix.columns)
+
+
 def train_lightgbm(
     train_features: pd.DataFrame,
     target: pd.Series,
@@ -254,9 +275,23 @@ def validation_frame_for_artifact(
     """Devuelve predicciones de un artefacto aplicando sus rutas guardadas."""
     scored: list[pd.DataFrame] = []
     routes = artifact.get("metadata", {}).get("station_routes", {})
+    station_models = artifact.get("station_models", {})
+    station_columns = artifact.get("station_feature_columns", {})
     for horizon, valid in validation_features.items():
-        matrix, _ = encode_features(valid, artifact["feature_columns"])
-        values = np.maximum(0.0, np.asarray(artifact["models"][horizon].predict(matrix), dtype=float))
+        if station_models:
+            values = []
+            for _, row in valid.iterrows():
+                station_id = str(row["station_id"])
+                model = station_models.get(station_id, {}).get(str(horizon))
+                columns = station_columns.get(station_id, {}).get(str(horizon))
+                if model is None or columns is None:
+                    raise RuntimeError(f"Artefacto sin modelo para estación {station_id}, +{horizon}")
+                matrix, _ = encode_station_features(pd.DataFrame([row]), columns)
+                values.append(float(model.predict(matrix)[0]))
+            values = np.maximum(0.0, np.asarray(values, dtype=float))
+        else:
+            matrix, _ = encode_features(valid, artifact["feature_columns"])
+            values = np.maximum(0.0, np.asarray(artifact["models"][horizon].predict(matrix), dtype=float))
         frame = valid[["station_id", "target_at", "actual", "lag_672", "rolling_mean_4"]].assign(prediction=values)
         for index, row in frame.iterrows():
             method = routes.get(str(row["station_id"]), {}).get(str(horizon), "lightgbm")
@@ -343,6 +378,8 @@ def train_and_validate(
     dict[int, pd.DataFrame],
     pd.DataFrame,
     dict[str, dict[str, str]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, list[str]]],
 ]:
     """Entrena por horizonte y valida en ciclos horarios completos."""
     origins = validation_origins(observations, test_origins)
@@ -354,6 +391,8 @@ def train_and_validate(
     validation_rows: list[pd.DataFrame] = []
     validation_features: dict[int, pd.DataFrame] = {}
     feature_columns: list[str] = []
+    station_models: dict[str, dict[str, Any]] = {}
+    station_feature_columns: dict[str, dict[str, list[str]]] = {}
 
     baseline_raw = temporal_backtest(observations, test_origins=test_origins)
     baseline_for_scoring = baseline_raw.rename(
@@ -381,14 +420,28 @@ def train_and_validate(
         valid = feature_rows(prepared, horizon_minutes=horizon, origins=origins)
         if train.empty or valid.empty:
             raise ValueError(f"No hay features suficientes para horizonte +{horizon}")
+        # Se conserva un modelo global como fallback para artefactos y datos
+        # incompletos, pero la predicción principal se entrena por estación.
         train_matrix, feature_columns = encode_features(train)
         valid_matrix, _ = encode_features(valid, feature_columns)
-        model = train_lightgbm(
-            train_matrix,
-            train["actual"],
-            sample_weight=station_balance_weights(train),
-        )
+        model = train_lightgbm(train_matrix, train["actual"], sample_weight=station_balance_weights(train))
         prediction = np.maximum(0.0, np.asarray(model.predict(valid_matrix), dtype=float))
+        for station_id in sorted(str(value) for value in train["station_id"].unique()):
+            station_train = train[train["station_id"].astype(str) == station_id]
+            station_valid = valid[valid["station_id"].astype(str) == station_id]
+            if station_train.empty or station_valid.empty:
+                continue
+            station_matrix, station_columns = encode_station_features(station_train)
+            station_model = train_lightgbm(station_matrix, station_train["actual"])
+            station_models.setdefault(station_id, {})[str(horizon)] = station_model
+            station_feature_columns.setdefault(station_id, {})[str(horizon)] = station_columns
+            station_valid_matrix, _ = encode_station_features(station_valid, station_columns)
+            station_prediction = np.maximum(
+                0.0, np.asarray(station_model.predict(station_valid_matrix), dtype=float)
+            )
+            valid_indexes = station_valid.index.to_numpy()
+            for local_index, global_index in enumerate(valid_indexes):
+                prediction[valid.index.get_loc(global_index)] = station_prediction[local_index]
         if len(prediction) != len(valid) or not np.isfinite(prediction).all():
             raise RuntimeError(f"Inferencia inválida para horizonte +{horizon}")
         validation_rows.append(
@@ -431,6 +484,8 @@ def train_and_validate(
     data_cutoff = pd.Timestamp(prepared["target_at"].max())
     production_models: dict[int, Any] = {}
     production_smoke_inputs: dict[int, pd.DataFrame] = {}
+    production_station_models: dict[str, dict[str, Any]] = {}
+    production_station_columns: dict[str, dict[str, list[str]]] = {}
     for horizon in HORIZONS:
         production_train = feature_rows(
             prepared,
@@ -448,6 +503,13 @@ def train_and_validate(
         production_smoke_inputs[horizon] = production_matrix.iloc[[-1]]
         if production_columns != feature_columns:
             raise RuntimeError("Las columnas de features cambian entre horizontes")
+        for station_id in sorted(str(value) for value in production_train["station_id"].unique()):
+            station_train = production_train[production_train["station_id"].astype(str) == station_id]
+            station_matrix, station_columns = encode_station_features(station_train)
+            production_station_models.setdefault(station_id, {})[str(horizon)] = train_lightgbm(
+                station_matrix, station_train["actual"]
+            )
+            production_station_columns.setdefault(station_id, {})[str(horizon)] = station_columns
 
     return (
         production_models,
@@ -460,15 +522,30 @@ def train_and_validate(
         validation_features,
         model_rows,
         station_routes,
+        production_station_models,
+        production_station_columns,
     )
 
 
-def artifact_bytes(models: dict[int, Any], feature_columns: list[str], metadata: dict[str, Any]) -> bytes:
+def artifact_bytes(
+    models: dict[int, Any],
+    feature_columns: list[str],
+    metadata: dict[str, Any],
+    *,
+    station_models: dict[str, dict[str, Any]] | None = None,
+    station_feature_columns: dict[str, dict[str, list[str]]] | None = None,
+) -> bytes:
     try:
         import joblib
     except ImportError as exc:
         raise RuntimeError("Instala joblib para serializar el artefacto") from exc
-    payload = {"models": models, "feature_columns": feature_columns, "metadata": metadata}
+    payload = {
+        "models": models,
+        "feature_columns": feature_columns,
+        "metadata": metadata,
+        "station_models": station_models or {},
+        "station_feature_columns": station_feature_columns or {},
+    }
     buffer = io.BytesIO()
     joblib.dump(payload, buffer, compress=3)
     return buffer.getvalue()
@@ -520,6 +597,8 @@ def train_and_register(
         validation_features,
         validation_frame,
         station_routes,
+        station_models,
+        station_feature_columns,
     ) = train_and_validate(observations, test_origins=test_origins)
     smoke_predictions = [models[horizon].predict(smoke_inputs[horizon]) for horizon in HORIZONS]
     smoke_ok = all(
@@ -573,8 +652,12 @@ def train_and_register(
     version = f"lgbm-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{commit_label}-{uuid.uuid4().hex[:8]}"
     artifact_path = f"lightgbm/{version}.joblib"
     metadata = {
+        "model_strategy": "independent_station_horizon",
+        "station_model_count": sum(len(models_by_horizon) for models_by_horizon in station_models.values()),
         "horizons_minutes": list(HORIZONS),
-        "validation_accuracy": model_accuracy,
+            "validation_accuracy": model_accuracy,
+            "model_strategy": "independent_station_horizon",
+            "station_model_count": sum(len(models_by_horizon) for models_by_horizon in station_models.values()),
         "best_baseline_accuracy": best_baseline,
         "champion_same_window_accuracy": champion_same_window_accuracy,
         "validation_cycles": test_origins,
@@ -584,7 +667,17 @@ def train_and_register(
         "station_routes": station_routes,
         "station_accuracy_floor": MIN_STATION_ACCURACY,
     }
-    db.upload_artifact(bucket, artifact_path, artifact_bytes(models, feature_columns, metadata))
+    db.upload_artifact(
+        bucket,
+        artifact_path,
+        artifact_bytes(
+            models,
+            feature_columns,
+            metadata,
+            station_models=station_models,
+            station_feature_columns=station_feature_columns,
+        ),
+    )
     db.insert(
         "model_versions",
         {

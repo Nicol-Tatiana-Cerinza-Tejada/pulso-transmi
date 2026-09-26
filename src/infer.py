@@ -15,7 +15,7 @@ import pandas as pd
 from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .baselines import FREQUENCY, HORIZONS
 from .db import SupabaseDB
-from .train import encode_features
+from .train import encode_features, encode_station_features
 
 
 def utc(value: str | datetime) -> pd.Timestamp:
@@ -220,11 +220,27 @@ def run_inference(
     history = load_observations_until(db, cutoff)
     target_features, positions = build_target_features(history, targets, cutoff)
     predictions: list[dict[str, Any] | None] = [None] * len(targets)
+    station_models = artifact.get("station_models", {})
+    station_feature_columns = artifact.get("station_feature_columns", {})
     for horizon, indexes in positions.items():
         if not indexes:
             continue
-        matrix, _ = encode_features(target_features.iloc[indexes], artifact["feature_columns"])
-        values = np.asarray(artifact["models"][horizon].predict(matrix), dtype=float)
+        if station_models:
+            values = []
+            for index in indexes:
+                station_id = str(targets[index]["station_id"])
+                model = station_models.get(station_id, {}).get(str(horizon))
+                columns = station_feature_columns.get(station_id, {}).get(str(horizon))
+                if model is None or columns is None:
+                    raise RuntimeError(f"El champion no tiene modelo para {station_id} +{horizon}")
+                matrix, _ = encode_station_features(
+                    target_features.iloc[[index]], columns
+                )
+                values.append(float(model.predict(matrix)[0]))
+            values = np.asarray(values, dtype=float)
+        else:
+            matrix, _ = encode_features(target_features.iloc[indexes], artifact["feature_columns"])
+            values = np.asarray(artifact["models"][horizon].predict(matrix), dtype=float)
         for index, value in zip(indexes, values, strict=True):
             station_id = str(targets[index]["station_id"])
             route = artifact.get("metadata", {}).get("station_routes", {}).get(station_id, {}).get(str(horizon), "lightgbm")
