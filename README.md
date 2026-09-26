@@ -455,6 +455,57 @@ las observaciones disponibles. Un candidato solo se promueve si supera 85%, al
 mejor baseline y al champion medido en esos mismos ciclos por al menos 0,5
 puntos, además de pasar una inferencia de prueba.
 
+### Automatización con Cron Job
+
+La publicación periódica se ejecuta en GitHub Actions (el `cron` usa UTC):
+
+- `.github/workflows/infer.yml`: cada 5 minutos. Recolecta observaciones,
+  consulta el ciclo vigente y envía las 48 predicciones cuando hay una ventana
+  abierta. También evalúa y monitorea.
+- `.github/workflows/collector.yml`: cada 30 minutos como respaldo de la
+  recolección incremental.
+- `.github/workflows/train.yml`: una vez al día para validar y registrar el
+  modelo.
+
+Para activarlo, en GitHub entra a `Settings > Secrets and variables > Actions` y
+crea `PULSO_API_KEY`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`. Después ve a
+`Actions > Inference > Run workflow` para probarlo manualmente. El cron puede
+retrasarse algunos minutos; por eso el código consulta `/v1/clock` y
+`/v1/forecast-cycles/current`, y la misma entrega se protege con una clave de
+idempotencia.
+
+### Disparo externo desde cron-job.org
+
+GitHub Actions se ejecuta en la nube, así que el computador personal puede estar
+apagado. Si se quiere usar cron-job.org como reloj externo, crea un job `POST`
+cada 5 minutos con esta URL:
+
+```text
+https://api.github.com/repos/Nicol-Tatiana-Cerinza-Tejada/pulso-transmi/dispatches
+```
+
+Configura estos headers en cron-job.org:
+
+```text
+Accept: application/vnd.github+json
+Authorization: Bearer <TOKEN_DE_GITHUB>
+X-GitHub-Api-Version: 2022-11-28
+Content-Type: application/json
+```
+
+Y este body JSON:
+
+```json
+{"event_type":"cron-job-inference"}
+```
+
+El token debe ser un Fine-grained Personal Access Token limitado a este
+repositorio y con permiso `Contents: Read and write`. No uses aquí
+`PULSO_API_KEY`: esa clave solo permanece como Secret de GitHub Actions y nunca
+se envía a cron-job.org. El workflow conserva también su cron interno de 5
+minutos como respaldo; si dejas ambos activos, las ejecuciones repetidas no
+duplican submissions gracias a la idempotencia.
+
 En la comprobación offline del 24 de septiembre de 2026, el candidato obtuvo
 85,5963% frente a 82,7461% del mejor baseline. El champion obtuvo 85,5984% en
 esa misma ventana; por la diferencia mínima, no se justificó reemplazarlo.
