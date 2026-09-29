@@ -46,7 +46,9 @@ filas, estaciones y rango temporal en `dataset_snapshots`.
 
 El candidato usa únicamente ese snapshot. Los modelos reciben más peso en las
 observaciones recientes mediante una vida media de 14 días, sin descartar
-completamente la historia.
+completamente la historia. En inferencia se aplica además un ajuste de nivel
+limitado entre 0.75 y 1.25: compara las últimas 2 horas disponibles con los
+mismos slots de 7 días antes y nunca usa datos posteriores al cutoff.
 
 ## 4. Comparación temporal sin información futura
 
@@ -64,9 +66,11 @@ Cada candidato queda registrado en `model_versions` con versión, commit,
 snapshot asociado, métricas oficiales, rutas por estación y horizonte,
 significancia y mínimo de accuracy por estación.
 
-La promoción exige superar el baseline, mejorar el champion con margen,
-pasar la prueba de significancia, producir predicciones válidas y respetar el
-piso de accuracy por estación. Los cambios se auditan en
+La promoción exige superar la referencia, mejorar el champion con margen,
+pasar la prueba de significancia y producir predicciones válidas. El 85 % se
+usa como objetivo y alerta, pero no bloquea una mejora comprobada: durante un
+drift puede ser correcto promover un modelo inferior al 85 % si supera al
+champion vigente. Los cambios se auditan en
 `model_promotion_events`; las versiones anteriores quedan retiradas, no se
 eliminan.
 

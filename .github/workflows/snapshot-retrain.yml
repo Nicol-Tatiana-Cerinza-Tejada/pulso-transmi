@@ -2,8 +2,8 @@ name: Snapshot, retrain and promote
 
 on:
   schedule:
-    # GitHub Actions usa UTC; revisa cada hora si la accuracy cayó >= 3 puntos.
-    - cron: "17 * * * *"
+    # GitHub Actions usa UTC; revisa cada 20 minutos si hay drift o caída.
+    - cron: "*/20 * * * *"
   workflow_dispatch:
   repository_dispatch:
     types: [snapshot-retrain]
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   retrain:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       PULSO_API_KEY: ${{ secrets.PULSO_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

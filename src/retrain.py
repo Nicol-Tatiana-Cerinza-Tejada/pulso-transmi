@@ -12,7 +12,7 @@ from .db import SupabaseDB
 from .train import train_and_register
 
 
-def regression_status(db: SupabaseDB, *, drop_points: float = 3.0, minimum_accuracy: float = 80.0) -> dict[str, Any]:
+def regression_status(db: SupabaseDB, *, drop_points: float = 3.0, minimum_accuracy: float = 85.0) -> dict[str, Any]:
     """Detecta degradación global o localizada usando métricas ya reveladas."""
     response = (
         db.client.table("metrics")

@@ -15,7 +15,7 @@ import pandas as pd
 from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .baselines import FREQUENCY, HORIZONS
 from .db import SupabaseDB
-from .train import encode_features, encode_station_features
+from .train import encode_features, encode_station_features, level_adjustment_factor
 
 
 def utc(value: str | datetime) -> pd.Timestamp:
@@ -124,6 +124,7 @@ def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], 
             "target_hour_cos": float(np.cos(2 * np.pi * hour / 24)),
             "target_weekday_sin": float(np.sin(2 * np.pi * weekday / 7)),
             "target_weekday_cos": float(np.cos(2 * np.pi * weekday / 7)),
+            "level_factor": level_adjustment_factor(series, cutoff),
         }
         for lag in (1, 2, 4, 8, 96, 672):
             timestamp = cutoff - lag * FREQUENCY
@@ -222,6 +223,9 @@ def run_inference(
     predictions: list[dict[str, Any] | None] = [None] * len(targets)
     station_models = artifact.get("station_models", {})
     station_feature_columns = artifact.get("station_feature_columns", {})
+    level_adjustment_enabled = bool(
+        artifact.get("metadata", {}).get("level_adjustment", {}).get("enabled", False)
+    )
     for horizon, indexes in positions.items():
         if not indexes:
             continue
@@ -252,6 +256,8 @@ def run_inference(
                     cutoff,
                     route,
                 )
+            elif level_adjustment_enabled:
+                value = float(value) * float(target_features.iloc[index]["level_factor"])
             if not math.isfinite(float(value)):
                 raise RuntimeError(f"Predicción no finita para target {targets[index]}")
             predictions[index] = {
