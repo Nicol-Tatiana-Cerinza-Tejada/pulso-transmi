@@ -29,6 +29,7 @@ ROLLING_WINDOWS = (4, 96, 672)
 MIN_PROMOTION_ACCURACY = 85.0
 MIN_PROMOTION_MARGIN = 0.5
 MIN_STATION_ACCURACY = 80.0
+RECENCY_HALF_LIFE_DAYS = 14.0
 FEATURE_NAMES = [
     *(f"lag_{steps}" for steps in LAG_STEPS),
     *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
@@ -199,6 +200,20 @@ def station_balance_weights(frame: pd.DataFrame) -> np.ndarray:
     totals = frame.groupby("station_id")["actual"].sum().clip(lower=1.0)
     weights = frame["station_id"].map(lambda station: 1.0 / float(totals[station])).to_numpy()
     return weights / weights.mean()
+
+
+def recency_weights(frame: pd.DataFrame, *, half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> np.ndarray:
+    """Da más peso a cambios recientes sin eliminar toda la historia."""
+    reference = pd.to_datetime(frame["origin_at"], utc=True).max()
+    age_days = (reference - pd.to_datetime(frame["origin_at"], utc=True)).dt.total_seconds() / 86400.0
+    weights = np.exp(-np.log(2.0) * age_days.clip(lower=0.0) / half_life_days)
+    weights = np.clip(weights.to_numpy(dtype=float), 0.35, 1.0)
+    return weights / weights.mean()
+
+
+def training_weights(frame: pd.DataFrame) -> np.ndarray:
+    """Combina balance por estación con adaptación gradual al drift."""
+    return station_balance_weights(frame) * recency_weights(frame)
 
 
 def _accuracy_rows(frame: pd.DataFrame, group_columns: list[str], *, prediction_column: str) -> pd.DataFrame:
@@ -424,7 +439,7 @@ def train_and_validate(
         # incompletos, pero la predicción principal se entrena por estación.
         train_matrix, feature_columns = encode_features(train)
         valid_matrix, _ = encode_features(valid, feature_columns)
-        model = train_lightgbm(train_matrix, train["actual"], sample_weight=station_balance_weights(train))
+        model = train_lightgbm(train_matrix, train["actual"], sample_weight=training_weights(train))
         prediction = np.maximum(0.0, np.asarray(model.predict(valid_matrix), dtype=float))
         for station_id in sorted(str(value) for value in train["station_id"].unique()):
             station_train = train[train["station_id"].astype(str) == station_id]
@@ -432,7 +447,11 @@ def train_and_validate(
             if station_train.empty or station_valid.empty:
                 continue
             station_matrix, station_columns = encode_station_features(station_train)
-            station_model = train_lightgbm(station_matrix, station_train["actual"])
+            station_model = train_lightgbm(
+                station_matrix,
+                station_train["actual"],
+                sample_weight=recency_weights(station_train),
+            )
             station_models.setdefault(station_id, {})[str(horizon)] = station_model
             station_feature_columns.setdefault(station_id, {})[str(horizon)] = station_columns
             station_valid_matrix, _ = encode_station_features(station_valid, station_columns)
@@ -498,7 +517,7 @@ def train_and_validate(
         production_models[horizon] = train_lightgbm(
             production_matrix,
             production_train["actual"],
-            sample_weight=station_balance_weights(production_train),
+            sample_weight=training_weights(production_train),
         )
         production_smoke_inputs[horizon] = production_matrix.iloc[[-1]]
         if production_columns != feature_columns:
@@ -507,7 +526,9 @@ def train_and_validate(
             station_train = production_train[production_train["station_id"].astype(str) == station_id]
             station_matrix, station_columns = encode_station_features(station_train)
             production_station_models.setdefault(station_id, {})[str(horizon)] = train_lightgbm(
-                station_matrix, station_train["actual"]
+                station_matrix,
+                station_train["actual"],
+                sample_weight=recency_weights(station_train),
             )
             production_station_columns.setdefault(station_id, {})[str(horizon)] = station_columns
 

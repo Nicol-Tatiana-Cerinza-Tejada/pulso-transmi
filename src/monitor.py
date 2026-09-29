@@ -17,6 +17,7 @@ PERFORMANCE_ACCURACY_THRESHOLD = 80.0
 PERFORMANCE_CONSECUTIVE_CYCLES = 3
 DATA_PSI_THRESHOLD = 0.20
 LOOKBACK_HOURS = 24
+COLLECTOR_STALE_MINUTES = 45
 
 
 def psi(reference: pd.Series, recent: pd.Series, bins: int = 10) -> float:
@@ -36,28 +37,41 @@ def psi(reference: pd.Series, recent: pd.Series, bins: int = 10) -> float:
     return float(np.sum((recent_pct - ref_pct) * np.log(recent_pct / ref_pct)))
 
 
-def open_signal(db: SupabaseDB, signal_type: str) -> bool:
+def open_signal(db: SupabaseDB, signal_type: str, station_id: str | None = None) -> bool:
     response = (
         db.client.table("drift_signals")
-        .select("id")
+        .select("id,station_id")
         .eq("signal_type", signal_type)
         .eq("status", "open")
-        .limit(1)
         .execute()
     )
-    return bool(response.data)
+    return any(row.get("station_id") == station_id for row in (response.data or []))
 
 
-def write_signal(db: SupabaseDB, signal_type: str, *, score: float, reference: float | None, current: float | None, details: dict[str, Any]) -> bool:
-    if open_signal(db, signal_type):
+def write_signal(
+    db: SupabaseDB,
+    signal_type: str,
+    *,
+    station_id: str | None = None,
+    score: float,
+    reference: float | None,
+    current: float | None,
+    details: dict[str, Any],
+    window_start: pd.Timestamp | None = None,
+    window_end: pd.Timestamp | None = None,
+) -> bool:
+    if open_signal(db, signal_type, station_id):
         return False
     db.insert(
         "drift_signals",
         {
+            "station_id": station_id,
             "signal_type": signal_type,
             "score": score,
             "reference_value": reference,
             "current_value": current,
+            "window_start": window_start.isoformat() if window_start is not None else None,
+            "window_end": window_end.isoformat() if window_end is not None else None,
             "details": details,
             "status": "open",
         },
@@ -70,20 +84,27 @@ def performance_signal(db: SupabaseDB) -> bool:
     if metrics.empty:
         return False
     metrics["calculated_at"] = pd.to_datetime(metrics["calculated_at"], utc=True)
-    cycles = metrics.groupby("cycle_id").agg(
-        accuracy=("accuracy", "mean"), calculated_at=("calculated_at", "max")
-    ).sort_values("calculated_at")
-    recent = cycles.tail(PERFORMANCE_CONSECUTIVE_CYCLES)
-    if len(recent) < PERFORMANCE_CONSECUTIVE_CYCLES or not (recent["accuracy"] < PERFORMANCE_ACCURACY_THRESHOLD).all():
-        return False
-    return write_signal(
-        db,
-        "performance_drift",
-        score=float(PERFORMANCE_ACCURACY_THRESHOLD - recent["accuracy"].iloc[-1]),
-        reference=PERFORMANCE_ACCURACY_THRESHOLD,
-        current=float(recent["accuracy"].iloc[-1]),
-        details={"cycles": list(recent.index), "consecutive": PERFORMANCE_CONSECUTIVE_CYCLES},
-    )
+    metrics["station_id"] = metrics["station_id"].astype(str)
+    detected = False
+    for station_id, station_metrics in metrics.groupby("station_id"):
+        cycles = station_metrics.groupby("cycle_id").agg(
+            accuracy=("accuracy", "mean"), calculated_at=("calculated_at", "max")
+        ).sort_values("calculated_at")
+        recent = cycles.tail(PERFORMANCE_CONSECUTIVE_CYCLES)
+        if len(recent) < PERFORMANCE_CONSECUTIVE_CYCLES or not (recent["accuracy"] < PERFORMANCE_ACCURACY_THRESHOLD).all():
+            continue
+        detected = write_signal(
+            db,
+            "performance_drift",
+            station_id=station_id,
+            score=float(PERFORMANCE_ACCURACY_THRESHOLD - recent["accuracy"].iloc[-1]),
+            reference=PERFORMANCE_ACCURACY_THRESHOLD,
+            current=float(recent["accuracy"].iloc[-1]),
+            window_start=recent["calculated_at"].iloc[0],
+            window_end=recent["calculated_at"].iloc[-1],
+            details={"station_id": station_id, "cycles": list(recent.index), "consecutive": PERFORMANCE_CONSECUTIVE_CYCLES},
+        ) or detected
+    return detected
 
 
 def data_signal(db: SupabaseDB) -> bool:
@@ -94,29 +115,44 @@ def data_signal(db: SupabaseDB) -> bool:
     end = observations["ts"].max()
     recent_start = end - timedelta(hours=24)
     reference_start = recent_start - timedelta(days=28)
-    reference = observations[(observations["ts"] >= reference_start) & (observations["ts"] < recent_start)]["value"]
-    recent = observations[observations["ts"] >= recent_start]["value"]
-    score = psi(reference, recent)
-    if score < DATA_PSI_THRESHOLD:
-        return False
-    return write_signal(
-        db,
-        "data_drift",
-        score=score,
-        reference=0.0,
-        current=score,
-        details={"feature": "observations.value", "reference_days": 28, "recent_hours": 24, "threshold": DATA_PSI_THRESHOLD},
-    )
+    detected = False
+    for station_id, station_observations in observations.groupby("station_id"):
+        reference = station_observations[(station_observations["ts"] >= reference_start) & (station_observations["ts"] < recent_start)]["value"]
+        recent = station_observations[station_observations["ts"] >= recent_start]["value"]
+        score = psi(reference, recent)
+        if score < DATA_PSI_THRESHOLD:
+            continue
+        detected = write_signal(
+            db,
+            "data_drift",
+            station_id=str(station_id),
+            score=score,
+            reference=0.0,
+            current=score,
+            window_start=recent_start,
+            window_end=end,
+            details={"station_id": str(station_id), "feature": "observations.value", "reference_days": 28, "recent_hours": 24, "threshold": DATA_PSI_THRESHOLD},
+        ) or detected
+    return detected
 
 
 def operational_signal(db: SupabaseDB) -> bool:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=LOOKBACK_HOURS)
-    runs = fetch_all(db, "collector_runs", "id,started_at,status,error")
+    runs = fetch_all(db, "collector_runs", "id,started_at,finished_at,status,error")
     failed_runs = 0
+    collector_stale = False
     if not runs.empty:
         runs["started_at"] = pd.to_datetime(runs["started_at"], utc=True)
+        runs["finished_at"] = pd.to_datetime(runs["finished_at"], utc=True, errors="coerce")
         failed_runs = int(((runs["started_at"] >= cutoff) & (runs["status"] == "failed")).sum())
+        latest_finished = runs["finished_at"].dropna().max()
+        collector_stale = bool(
+            pd.notna(latest_finished)
+            and latest_finished < pd.Timestamp.now(tz="UTC") - timedelta(minutes=COLLECTOR_STALE_MINUTES)
+        )
+    else:
+        collector_stale = True
     try:
         receipts = fetch_all(db, "submission_receipts", "participant_id,cycle_id,status,created_at")
     except Exception as exc:
@@ -135,7 +171,7 @@ def operational_signal(db: SupabaseDB) -> bool:
         recent_cycles = set(predictions.loc[predictions["created_at"] >= cutoff, "cycle_id"])
         accepted_cycles = set(receipts.loc[receipts["status"] == "accepted", "cycle_id"]) if not receipts.empty else set()
         missing_cycles = recent_cycles - accepted_cycles
-    total = failed_runs + pending + len(missing_cycles)
+    total = failed_runs + pending + len(missing_cycles) + int(collector_stale)
     if total == 0:
         return False
     return write_signal(
@@ -146,6 +182,8 @@ def operational_signal(db: SupabaseDB) -> bool:
         current=float(total),
         details={
             "failed_collector_runs": failed_runs,
+            "collector_stale": collector_stale,
+            "collector_stale_minutes": COLLECTOR_STALE_MINUTES,
             "pending_submissions": pending,
             "cycles_without_accepted_submission": sorted(missing_cycles),
             "lookback_hours": LOOKBACK_HOURS,
