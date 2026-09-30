@@ -144,6 +144,7 @@ export type DashboardData = {
   champion: Champion[];
   modelHistory: ModelHistory[];
   driftSignals: DriftSignal[];
+  driftHistory: DriftSignal[];
   pipelineRuns: PipelineRun[];
   leaderboard: LeaderboardSnapshot[];
 };

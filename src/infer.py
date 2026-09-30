@@ -315,7 +315,34 @@ def run_inference(
         )
     save_predictions(db, cycle_id, model, final_predictions, cutoff)
 
-    receipt = api.create_submission(payload, idempotency_key=key)
+    try:
+        receipt = api.create_submission(payload, idempotency_key=key)
+    except Exception as exc:
+        request_id = getattr(exc, "request_id", None)
+        db.client.table("submission_receipts").update(
+            {
+                "status": "failed",
+                "error": str(exc)[:4000],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("participant_id", participant_id).eq("cycle_id", cycle_id).eq("attempt", attempt).execute()
+        try:
+            db.record_pipeline_event(
+                {
+                    "pipeline": "infer",
+                    "run_id": f"infer-{participant_id}-{cycle_id}-{attempt}",
+                    "cycle_id": cycle_id,
+                    "model_version": model,
+                    "status": "failed",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "error": str(exc)[:4000],
+                    "request_id": request_id,
+                    "details": {"stage": "create_submission", "attempt": attempt},
+                }
+            )
+        except Exception:
+            pass
+        raise
     submission_id = receipt.get("submission_id")
     db.client.table("submission_receipts").update(
         {"status": "accepted", "submission_id": submission_id, "receipt": receipt, "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -336,11 +363,29 @@ def main() -> int:
                 result = {"status": "waiting"}
                 print(result)
                 return 0
-            result = run_inference(api, SupabaseDB(), bucket=args.bucket)
+            db = SupabaseDB()
+            result = run_inference(api, db, bucket=args.bucket)
         print(result)
         return 0 if result["status"] in {"waiting", "no_open_cycle", "already_submitted", "accepted"} else 1
     except Exception as exc:
         print(f"inference error: {exc}")
+        try:
+            db = locals().get("db")
+            if db is None:
+                db = SupabaseDB()
+            db.record_pipeline_event(
+                {
+                    "pipeline": "infer",
+                    "run_id": f"infer-failed-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}",
+                    "status": "failed",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "error": str(exc)[:4000],
+                    "request_id": getattr(exc, "request_id", None),
+                    "details": {"stage": "run_inference"},
+                }
+            )
+        except Exception:
+            pass
         return 1
 
 

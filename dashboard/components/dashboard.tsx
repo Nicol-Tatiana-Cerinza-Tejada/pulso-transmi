@@ -32,6 +32,7 @@ const emptyData: DashboardData = {
   champion: [],
   modelHistory: [],
   driftSignals: [],
+  driftHistory: [],
   pipelineRuns: [],
   leaderboard: [],
 };
@@ -47,6 +48,7 @@ const fmtShortDate = (value: string | number) =>
   );
 
 const pct = (value?: number | null) => (value === null || value === undefined ? "—" : `${value.toFixed(2)}%`);
+const coveragePct = (value?: number | null) => (value === null || value === undefined ? "—" : `${(value * 100).toFixed(2)}%`);
 const chartPercent = (value: unknown, decimals = 2) => `${Number(value).toFixed(decimals)}%`;
 const chartTickPercent = (value: unknown) => `${value}%`;
 const fmtDelay = (seconds?: number | null) => {
@@ -208,9 +210,10 @@ export default function Dashboard() {
 
         {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">No se pudo actualizar: {error}. Se muestran los últimos datos disponibles.</div>}
 
-        <section className="-mt-5 grid gap-4 px-2 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="-mt-5 grid gap-4 px-2 sm:grid-cols-2 lg:grid-cols-5">
           <MetricCard label="Accuracy actual" value={pct(latestTimeline?.accuracy)} detail={latestTimeline ? `Ciclo ${latestTimeline.cycle_id}` : "Sin ciclos evaluados"} tone="teal" />
           <MetricCard label="Tendencia rolling 24 h" value={pct(latestTimeline?.accuracy_rolling_24h)} detail={latestTimeline ? fmtDate(latestTimeline.calculated_at) : "Esperando observaciones"} />
+          <MetricCard label="Cobertura" value={coveragePct(latestTimeline?.coverage)} detail="Objetivo mínimo: 95 %" tone={latestTimeline?.coverage !== null && latestTimeline?.coverage !== undefined && latestTimeline.coverage < 0.95 ? "coral" : "dark"} />
           <MetricCard label="Leaderboard acumulado" value={bestPosition?.position ? `#${bestPosition.position}` : "—"} detail={bestPosition?.display_name ?? "Sin snapshot"} tone="coral" />
           <div className="rounded-2xl bg-white p-5 shadow-soft"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Estado del pipeline</p><div className="mt-4"><PipelineSummary runs={data.pipelineRuns} /></div><p className="mt-4 text-xs text-slate-400">{lastUpdated ? `Consultado ${fmtDate(lastUpdated.toISOString())}` : "Sin consulta"}</p></div>
         </section>
@@ -245,7 +248,7 @@ export default function Dashboard() {
 
           <div className="grid gap-8 lg:grid-cols-2">
             <Section eyebrow="Pregunta 3 · modelo" title="¿Qué champion está produciendo las predicciones?"><div className="rounded-2xl bg-white p-6 shadow-soft">{latestChampion ? <dl className="grid gap-4 sm:grid-cols-2">{[["Versión", latestChampion.version], ["Activo desde", fmtDate(latestChampion.active_since)], ["Data cutoff", fmtDate(latestChampion.data_cutoff)], ["Métrica validación", pct(latestChampion.validation_metric)], ["Commit", latestChampion.git_commit?.slice(0, 12) ?? "No registrado"]].map(([label, value]) => <div key={label}><dt className="text-xs font-bold uppercase tracking-wider text-slate-500">{label}</dt><dd className="mt-1 break-all text-sm font-semibold text-ink">{value}</dd></div>)}</dl> : <EmptyState>Sin champion registrado todavía.</EmptyState>}</div></Section>
-            <Section eyebrow="Pregunta 4 · drift" title="¿Hay señales abiertas que requieran acción?"><div className="rounded-2xl bg-white p-6 shadow-soft">{data.driftSignals.length === 0 ? <EmptyState>Sin señales abiertas.</EmptyState> : <div className="space-y-3">{data.driftSignals.map((signal) => <div key={signal.id} className="flex items-start justify-between gap-4 rounded-xl border border-slate-100 p-3"><div><p className="font-bold capitalize text-ink">{signal.signal_type.replaceAll("_", " ")}</p><p className="text-xs text-slate-500">{signal.station_id ? `Estación ${signal.station_id} · ` : "Global · "}{fmtDate(signal.detected_at)}</p><p className="mt-1 text-xs text-slate-500">Score: {signal.score === null ? "—" : signal.score.toFixed(3)} · actual: {signal.current_value === null ? "—" : signal.current_value.toFixed(2)} · referencia: {signal.reference_value === null ? "—" : signal.reference_value.toFixed(2)}</p><p className="text-xs text-slate-400">Ventana: {fmtDate(signal.window_start)} — {fmtDate(signal.window_end)}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold uppercase ${signal.severity === "critical" || signal.severity === "high" ? "bg-red-100 text-red-700" : signal.severity === "medium" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>{signal.severity}</span></div>)}</div>}</div></Section>
+            <Section eyebrow="Pregunta 4 · drift" title="¿Hay señales abiertas que requieran acción?"><div className="rounded-2xl bg-white p-6 shadow-soft">{data.driftSignals.length === 0 ? <EmptyState>Sin señales abiertas.</EmptyState> : <div className="space-y-3">{data.driftSignals.map((signal) => <div key={signal.id} className="flex items-start justify-between gap-4 rounded-xl border border-slate-100 p-3"><div><p className="font-bold capitalize text-ink">{signal.signal_type.replaceAll("_", " ")}</p><p className="text-xs text-slate-500">{signal.station_id ? `Estación ${signal.station_id} · ` : "Global · "}{fmtDate(signal.detected_at)}</p><p className="mt-1 text-xs text-slate-500">Score: {signal.score === null ? "—" : signal.score.toFixed(3)} · actual: {signal.current_value === null ? "—" : signal.current_value.toFixed(2)} · referencia: {signal.reference_value === null ? "—" : signal.reference_value.toFixed(2)}</p><p className="text-xs text-slate-400">Ventana: {fmtDate(signal.window_start)} — {fmtDate(signal.window_end)}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold uppercase ${signal.severity === "critical" || signal.severity === "high" ? "bg-red-100 text-red-700" : signal.severity === "medium" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>{signal.severity}</span></div>)}</div>}<p className="mt-4 text-xs text-slate-400">Señales históricas registradas: {data.driftHistory.length}</p></div></Section>
           </div>
 
           <div className="grid gap-8 lg:grid-cols-3">

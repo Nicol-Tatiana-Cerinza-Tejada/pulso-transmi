@@ -191,3 +191,7 @@ class SupabaseDB:
     def download_artifact(self, bucket: str, path: str) -> bytes:
         """Descarga un artefacto privado desde Supabase Storage."""
         return bytes(self.client.storage.from_(bucket).download(path))
+
+    def record_pipeline_event(self, values: Mapping[str, Any]) -> None:
+        """Persiste una decisión o fallo observable del pipeline."""
+        self.client.table("pipeline_events").insert(dict(values)).execute()

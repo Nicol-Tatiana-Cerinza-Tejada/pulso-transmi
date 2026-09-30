@@ -38,6 +38,7 @@ alter table submission_receipts enable row level security;
 alter table model_promotion_events enable row level security;
 alter table leaderboard_snapshots enable row level security;
 alter table dataset_snapshots enable row level security;
+alter table pipeline_events enable row level security;
 
 -- Las vistas son SECURITY DEFINER y publican una proyección explícita. Estas
 -- policies dejan documentado el acceso server-side de los jobs sin abrir las
@@ -49,7 +50,7 @@ begin
     foreach table_name in array array[
         'stations', 'observations', 'collector_runs', 'model_versions',
         'predictions', 'actuals', 'metrics', 'drift_signals',
-        'submission_receipts', 'model_promotion_events', 'leaderboard_snapshots', 'dataset_snapshots'
+        'submission_receipts', 'model_promotion_events', 'leaderboard_snapshots', 'dataset_snapshots', 'pipeline_events'
     ] loop
         execute format('drop policy if exists %I on public.%I', table_name || '_service_role_select', table_name);
         execute format(
@@ -271,6 +272,36 @@ select
 from public.drift_signals
 where status = 'open';
 
+create or replace view public.v_drift_history as
+select
+    id,
+    station_id,
+    detected_at,
+    signal_type,
+    case
+        when lower(coalesce(details->>'severity', '')) in ('low', 'medium', 'high', 'critical')
+            then lower(details->>'severity')
+        when score >= 0.5 then 'high'
+        when score >= 0.2 then 'medium'
+        else 'low'
+    end as severity,
+    score,
+    reference_value,
+    current_value,
+    window_start,
+    window_end,
+    status
+from public.drift_signals
+order by detected_at desc
+limit 100;
+
+create or replace view public.v_pipeline_events as
+select id, pipeline, run_id, cycle_id, model_version, started_at, finished_at,
+       status, error, request_id, details
+from public.pipeline_events
+order by started_at desc
+limit 100;
+
 -- No se consultan submission_receipts ni sus payloads. Infer y evaluate se
 -- representan mediante agregados de predicciones y métricas. Se conservan las
 -- últimas 100 ejecuciones observables de cada pipeline.
@@ -307,6 +338,16 @@ with runs as (
         null::text as error
     from public.metrics
     group by cycle_id
+    union all
+    select
+        pipeline,
+        run_id,
+        started_at,
+        finished_at,
+        status,
+        null::bigint as rows_processed,
+        error
+    from public.pipeline_events
 ), ranked as (
     select runs.*, row_number() over (
         partition by pipeline order by started_at desc, run_id desc
@@ -362,5 +403,7 @@ grant select on public.v_demand_recent to anon, authenticated;
 grant select on public.v_pipeline_health to anon, authenticated;
 grant select on public.v_snapshot_history to anon, authenticated;
 grant select on public.v_retrain_history to anon, authenticated;
+grant select on public.v_drift_history to anon, authenticated;
+grant select on public.v_pipeline_events to anon, authenticated;
 
 commit;

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -105,19 +107,50 @@ def main() -> int:
     parser.add_argument("--drop-points", type=float, default=3.0)
     args = parser.parse_args()
     db = SupabaseDB()
+    run_id = f"retrain-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
     if args.only_if_regressed:
         status = regression_status(db, drop_points=args.drop_points)
         print({"retrain_gate": status})
         if not status["should_retrain"]:
+            db.record_pipeline_event(
+                {
+                    "pipeline": "retrain",
+                    "run_id": run_id,
+                    "status": "skipped",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "details": {"reason": status["reason"], **status},
+                }
+            )
             return 0
-    snapshot = create_snapshot(db, bucket=args.snapshot_bucket)
-    result = train_and_register(
-        snapshot["frame"],
-        db=db,
-        bucket=args.model_bucket,
-        test_origins=args.origins,
-        dataset_snapshot=snapshot,
+    db.record_pipeline_event(
+        {"pipeline": "retrain", "run_id": run_id, "status": "running", "details": {"trigger": "scheduled_or_manual"}}
     )
+    try:
+        snapshot = create_snapshot(db, bucket=args.snapshot_bucket)
+        result = train_and_register(
+            snapshot["frame"],
+            db=db,
+            bucket=args.model_bucket,
+            test_origins=args.origins,
+            dataset_snapshot=snapshot,
+        )
+    except Exception as exc:
+        db.client.table("pipeline_events").update(
+            {
+                "status": "failed",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "error": str(exc)[:4000],
+            }
+        ).eq("run_id", run_id).execute()
+        raise
+    db.client.table("pipeline_events").update(
+        {
+            "status": "succeeded",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "model_version": result.get("version"),
+            "details": {"snapshot_id": snapshot["snapshot_id"], "promoted": result.get("promoted")},
+        }
+    ).eq("run_id", run_id).execute()
     print({"snapshot_id": snapshot["snapshot_id"], **result})
     return 0
 
