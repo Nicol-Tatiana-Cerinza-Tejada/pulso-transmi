@@ -45,8 +45,11 @@ export async function fetchDashboardData() {
       supabase.from("v_leaderboard_snapshot").select("*").order("position", { ascending: true }),
     ]);
 
-  const responses = [timeline, stationAccuracy, horizonAccuracy, recentDemand, pipelineHealth, snapshots, retrainHistory, champion, modelHistory, driftSignals, driftHistory, pipelineRuns, leaderboard];
-  const failed = responses.find((response) => response.error);
+  // El historial de drift es una mejora opcional: si el proyecto aún no ha
+  // aplicado la migración 009/02_readonly_views, no debe impedir que cargue
+  // el resto del dashboard.
+  const requiredResponses = [timeline, stationAccuracy, horizonAccuracy, recentDemand, pipelineHealth, snapshots, retrainHistory, champion, modelHistory, driftSignals, pipelineRuns, leaderboard];
+  const failed = requiredResponses.find((response) => response.error);
   if (failed?.error) throw new Error(failed.error.message);
 
   return {
@@ -60,7 +63,7 @@ export async function fetchDashboardData() {
     champion: (champion.data ?? []) as Champion[],
     modelHistory: (modelHistory.data ?? []) as ModelHistory[],
     driftSignals: (driftSignals.data ?? []) as DriftSignal[],
-    driftHistory: (driftHistory.data ?? []) as DriftSignal[],
+    driftHistory: (driftHistory.error ? [] : driftHistory.data ?? []) as DriftSignal[],
     pipelineRuns: (pipelineRuns.data ?? []) as PipelineRun[],
     leaderboard: (leaderboard.data ?? []) as LeaderboardSnapshot[],
   } satisfies {
