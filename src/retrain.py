@@ -18,7 +18,7 @@ def regression_status(db: SupabaseDB, *, drop_points: float = 3.0, minimum_accur
     """Detecta degradación global o localizada usando métricas ya reveladas."""
     response = (
         db.client.table("metrics")
-        .select("cycle_id,station_id,calculated_at,accuracy")
+        .select("cycle_id,station_id,calculated_at,accuracy,coverage")
         .order("calculated_at")
         .execute()
     )
@@ -27,6 +27,12 @@ def regression_status(db: SupabaseDB, *, drop_points: float = 3.0, minimum_accur
         return {"should_retrain": False, "reason": "sin métricas reveladas"}
     frame["calculated_at"] = pd.to_datetime(frame["calculated_at"], utc=True)
     frame["station_id"] = frame["station_id"].astype(str)
+    frame["coverage"] = pd.to_numeric(frame["coverage"], errors="coerce")
+    # Una métrica con cobertura baja refleja targets ausentes; no debe
+    # provocar que se promueva o entrene un modelo por un fallo operativo.
+    frame = frame[frame["coverage"] >= 0.95].copy()
+    if frame.empty:
+        return {"should_retrain": False, "reason": "sin métricas con cobertura suficiente"}
     station_reasons: list[dict[str, Any]] = []
     for station_id, station_frame in frame.groupby("station_id"):
         cycles = (

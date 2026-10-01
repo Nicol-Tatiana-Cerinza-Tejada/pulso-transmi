@@ -18,6 +18,8 @@ PERFORMANCE_CONSECUTIVE_CYCLES = 3
 DATA_PSI_THRESHOLD = 0.20
 LOOKBACK_HOURS = 24
 COLLECTOR_STALE_MINUTES = 45
+OBSERVATION_STALE_MINUTES = 120
+MIN_EVALUATION_COVERAGE = 0.95
 
 
 def psi(reference: pd.Series, recent: pd.Series, bins: int = 10) -> float:
@@ -80,11 +82,17 @@ def write_signal(
 
 
 def performance_signal(db: SupabaseDB) -> bool:
-    metrics = fetch_all(db, "metrics", "cycle_id,station_id,calculated_at,accuracy")
+    metrics = fetch_all(db, "metrics", "cycle_id,station_id,calculated_at,accuracy,coverage")
     if metrics.empty:
         return False
     metrics["calculated_at"] = pd.to_datetime(metrics["calculated_at"], utc=True)
     metrics["station_id"] = metrics["station_id"].astype(str)
+    metrics["coverage"] = pd.to_numeric(metrics["coverage"], errors="coerce")
+    # Cobertura baja significa entrega incompleta, no necesariamente mal modelo.
+    # operational_signal reporta esa situación por separado.
+    metrics = metrics[metrics["coverage"] >= MIN_EVALUATION_COVERAGE].copy()
+    if metrics.empty:
+        return False
     detected = False
     for station_id, station_metrics in metrics.groupby("station_id"):
         cycles = station_metrics.groupby("cycle_id").agg(
@@ -113,6 +121,10 @@ def data_signal(db: SupabaseDB) -> bool:
         return False
     observations["ts"] = pd.to_datetime(observations["ts"], utc=True)
     end = observations["ts"].max()
+    if end < pd.Timestamp.now(tz="UTC") - timedelta(minutes=OBSERVATION_STALE_MINUTES):
+        # No convertir una ventana vieja en un falso drift nuevo. La frescura
+        # de la ingesta se vigila en operational_signal.
+        return False
     recent_start = end - timedelta(hours=24)
     reference_start = recent_start - timedelta(days=28)
     detected = False

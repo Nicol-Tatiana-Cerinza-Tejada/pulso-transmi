@@ -26,9 +26,11 @@ from .metrics import official_accuracy, station_metrics
 
 LAG_STEPS = (1, 2, 4, 8, 96, 672)
 ROLLING_WINDOWS = (4, 96, 672)
+SHORT_TREND_WINDOW = 16  # 4 horas a frecuencia de 15 minutos
 MIN_PROMOTION_ACCURACY = 85.0
 MIN_PROMOTION_MARGIN = 0.5
 MIN_STATION_ACCURACY = 85.0
+MAX_STATION_REGRESSION = 3.0
 RECENCY_HALF_LIFE_DAYS = 14.0
 LEVEL_WINDOW_POINTS = 8  # 2 horas a frecuencia de 15 minutos
 LEVEL_MIN_FACTOR = 0.75
@@ -40,8 +42,10 @@ MODEL_VARIANTS = {
 FEATURE_NAMES = [
     *(f"lag_{steps}" for steps in LAG_STEPS),
     *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
+    "rolling_mean_16",
     "rolling_std_96",
     "trend_4_96",
+    "trend_16_96",
     "target_hour",
     "target_weekday",
     "target_hour_sin",
@@ -129,10 +133,13 @@ def feature_rows(
             history_to_origin = series[series.index <= origin]
             for window in ROLLING_WINDOWS:
                 values[f"rolling_mean_{window}"] = float(history_to_origin.tail(window).mean())
+            recent_16 = history_to_origin.tail(SHORT_TREND_WINDOW)
+            values["rolling_mean_16"] = float(recent_16.mean())
             recent_96 = history_to_origin.tail(96)
             recent_4 = history_to_origin.tail(4)
             values["rolling_std_96"] = float(recent_96.std(ddof=0))
             values["trend_4_96"] = float(recent_4.mean() - recent_96.mean())
+            values["trend_16_96"] = float(recent_16.mean() - recent_96.mean())
             hour = target_at.hour
             weekday = target_at.dayofweek
             rows.append(
@@ -158,8 +165,10 @@ def encode_features(frame: pd.DataFrame, columns: list[str] | None = None) -> tu
     base_columns = [
         *(f"lag_{steps}" for steps in LAG_STEPS),
         *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
+        "rolling_mean_16",
         "rolling_std_96",
         "trend_4_96",
+        "trend_16_96",
         "target_hour",
         "target_weekday",
         "target_hour_sin",
@@ -180,8 +189,10 @@ def encode_station_features(frame: pd.DataFrame, columns: list[str] | None = Non
     base_columns = [
         *(f"lag_{steps}" for steps in LAG_STEPS),
         *(f"rolling_mean_{window}" for window in ROLLING_WINDOWS),
+        "rolling_mean_16",
         "rolling_std_96",
         "trend_4_96",
+        "trend_16_96",
         "target_hour",
         "target_weekday",
         "target_hour_sin",
@@ -388,6 +399,37 @@ def artifact_validation_accuracy(
     actuals = frame[["station_id", "target_at", "actual"]].rename(columns={"actual": "value"})
     predictions = frame[["station_id", "target_at", "prediction"]].rename(columns={"prediction": "value"})
     return official_accuracy(actuals, predictions)
+
+
+def station_regression_guardrail(
+    candidate_frame: pd.DataFrame,
+    champion_artifact: dict[str, Any],
+    validation_features: dict[int, pd.DataFrame],
+    *,
+    tolerance: float = MAX_STATION_REGRESSION,
+) -> dict[str, Any]:
+    """Evita mejorar el promedio a costa de romper una estación."""
+    candidate_scores = _accuracy_rows(
+        candidate_frame, ["station_id"], prediction_column="prediction"
+    ).rename(columns={"accuracy": "candidate_accuracy"})
+    champion_frame = validation_frame_for_artifact(champion_artifact, validation_features)
+    champion_scores = _accuracy_rows(
+        champion_frame, ["station_id"], prediction_column="prediction"
+    ).rename(columns={"accuracy": "champion_accuracy"})
+    comparison = candidate_scores.merge(champion_scores, on="station_id", how="inner")
+    comparison["delta_accuracy"] = (
+        comparison["candidate_accuracy"] - comparison["champion_accuracy"]
+    )
+    worst = float(comparison["delta_accuracy"].min()) if not comparison.empty else 0.0
+    return {
+        "passed": bool(worst >= -tolerance),
+        "tolerance_points": tolerance,
+        "worst_station_delta": worst,
+        "regressions": comparison.loc[
+            comparison["delta_accuracy"] < -tolerance,
+            ["station_id", "candidate_accuracy", "champion_accuracy", "delta_accuracy"],
+        ].to_dict("records"),
+    }
 
 
 def paired_bootstrap_improvement(
@@ -701,6 +743,12 @@ def train_and_register(
     current_champion = current_champion_response.data[0] if current_champion_response.data else None
     champion_same_window_accuracy: float | None = None
     champion_evaluation_error: str | None = None
+    station_guardrail: dict[str, Any] = {
+        "passed": True,
+        "tolerance_points": MAX_STATION_REGRESSION,
+        "worst_station_delta": None,
+        "regressions": [],
+    }
     significance: dict[str, Any] = {
         "significant": current_champion is None,
         "delta_accuracy": None,
@@ -721,6 +769,9 @@ def train_and_register(
             significance = paired_bootstrap_improvement(
                 validation_frame, champion_artifact, validation_features
             )
+            station_guardrail = station_regression_guardrail(
+                validation_frame, champion_artifact, validation_features
+            )
         except Exception as exc:
             champion_evaluation_error = str(exc)[:1000]
             print(
@@ -734,6 +785,8 @@ def train_and_register(
     version = f"lgbm-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{commit_label}-{uuid.uuid4().hex[:8]}"
     artifact_path = f"lightgbm/{version}.joblib"
     metadata = {
+        "feature_schema_version": "2026-09-drift-v2",
+        "feature_names": list(dict.fromkeys(FEATURE_NAMES + feature_columns)),
         "model_strategy": "independent_station_horizon",
         "station_model_count": sum(len(models_by_horizon) for models_by_horizon in station_models.values()),
         "level_adjustment": {
@@ -750,6 +803,7 @@ def train_and_register(
         "validation_metric": "official_unweighted_station_wape_hourly_cycles",
         "smoke_inference": smoke_ok,
         "significance": significance,
+        "station_guardrail": station_guardrail,
         "station_routes": station_routes,
         "station_model_variants": station_model_variants,
         "station_accuracy_target": MIN_STATION_ACCURACY,
@@ -781,6 +835,7 @@ def train_and_register(
                 "champion_same_window_accuracy": champion_same_window_accuracy,
                 "promotion_reference": max(MIN_PROMOTION_ACCURACY, best_baseline),
                 "significance": significance,
+                "station_guardrail": station_guardrail,
                 "station_routes": station_routes,
                 "station_model_variants": station_model_variants,
                 "station_accuracy_target": MIN_STATION_ACCURACY,
@@ -813,7 +868,12 @@ def train_and_register(
     # 85 % es el objetivo, no un bloqueo absoluto: durante un cambio de
     # demanda puede ser mejor promover un candidato de 83 % que supera al
     # champion actual, en vez de conservar un modelo peor.
-    promoted = model_accuracy > promotion_reference and beats_champion and smoke_ok
+    promoted = (
+        model_accuracy > promotion_reference
+        and beats_champion
+        and smoke_ok
+        and station_guardrail["passed"]
+    )
     if promoted:
         previous_version = current_champion["version"] if current_champion else None
         event_rows = db.insert(

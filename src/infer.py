@@ -15,7 +15,14 @@ import pandas as pd
 from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .baselines import FREQUENCY, HORIZONS
 from .db import SupabaseDB
-from .train import encode_features, encode_station_features, level_adjustment_factor
+from .train import (
+    LAG_STEPS,
+    ROLLING_WINDOWS,
+    SHORT_TREND_WINDOW,
+    encode_features,
+    encode_station_features,
+    level_adjustment_factor,
+)
 
 
 def utc(value: str | datetime) -> pd.Timestamp:
@@ -126,20 +133,25 @@ def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], 
             "target_weekday_cos": float(np.cos(2 * np.pi * weekday / 7)),
             "level_factor": level_adjustment_factor(series, cutoff),
         }
-        for lag in (1, 2, 4, 8, 96, 672):
+        for lag in LAG_STEPS:
             timestamp = cutoff - lag * FREQUENCY
             features[f"lag_{lag}"] = latest_value_at_or_before(
                 series, timestamp, station_id=station_id
             )
         history_to_cutoff = series[series.index <= cutoff]
-        for window in (4, 96, 672):
+        for window in ROLLING_WINDOWS:
             if len(history_to_cutoff) < window:
                 raise RuntimeError(f"Falta historia para rolling_mean_{window} de {station_id}")
             features[f"rolling_mean_{window}"] = float(history_to_cutoff.tail(window).mean())
+        if len(history_to_cutoff) < SHORT_TREND_WINDOW:
+            raise RuntimeError(f"Falta historia para rolling_mean_16 de {station_id}")
+        recent_16 = history_to_cutoff.tail(SHORT_TREND_WINDOW)
         recent_96 = history_to_cutoff.tail(96)
         recent_4 = history_to_cutoff.tail(4)
+        features["rolling_mean_16"] = float(recent_16.mean())
         features["rolling_std_96"] = float(recent_96.std(ddof=0))
         features["trend_4_96"] = float(recent_4.mean() - recent_96.mean())
+        features["trend_16_96"] = float(recent_16.mean() - recent_96.mean())
         positions[horizon].append(len(rows))
         rows.append(features)
     return pd.DataFrame(rows), positions
