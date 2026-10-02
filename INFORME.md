@@ -42,6 +42,25 @@
   HTTP; la consistencia se protege con idempotencia y checkpoints, no con una
   transacción distribuida única.
 
+## 3.1 Adaptación a la fase de drift
+
+Durante la fase de drift, los rezagos diarios y semanales dejaron de ser
+confiables. La inferencia ahora ejecuta un selector en memoria con modelos
+Ridge de ventana corta: `cross_ar` usa los últimos ocho valores de las doce
+estaciones, `own_ar` usa los ocho valores de la estación y `pooled_ar` normaliza
+las estaciones antes de ajustar un modelo común. Se prueban ventanas de 12 y
+24 horas, además de persistencia y el champion.
+
+La elección se hace por estación con seis orígenes sombra anteriores al corte.
+Cada origen usa únicamente observaciones disponibles hasta ese momento y se
+elige el candidato con menor WAPE. Si un modelo reciente falla, se conserva el
+champion y se registra la elección en el log. La inferencia mantiene las 48
+predicciones, el corte y la idempotencia originales.
+
+También se verifica la frescura: si una estación no tiene datos dentro de los
+30 minutos anteriores al corte, se intenta una ingesta adicional y se registra
+la advertencia sin inventar observaciones futuras.
+
 ## 4. Decisión de promoción
 
 Se comparó el promedio de accuracy de los cuatro horizontes contra el mejor
@@ -61,11 +80,14 @@ lgbm-20260920T165954Z-28d05e5ff125-af5852ea
 
 ## 5. Decisión de reentrenamiento
 
-El workflow de entrenamiento se programa diariamente. Cada ejecución crea una
-nueva versión y nunca sobrescribe artefactos. Una versión permanece como
-`candidate` si no supera al mejor baseline; solo se convierte en `champion` si
-también pasa la inferencia de prueba. El champion anterior se marca como
-`retired` al promover el nuevo.
+El workflow de entrenamiento se programa cada dos horas, con una histéresis de
+seis horas entre promociones. Cada ejecución crea una nueva versión y nunca
+sobrescribe artefactos. Una versión permanece como `candidate` si no supera al
+mejor baseline; solo se convierte en `champion` si también mejora las
+submissions aceptadas de las últimas 24 horas, conserva una regresión máxima de
+tres puntos por estación y pasa la inferencia de prueba. El umbral de 85 % queda
+como objetivo informativo, no como bloqueo durante el drift. El champion
+anterior se marca como `retired` al promover el nuevo.
 
 El reentrenamiento también debe considerarse antes si:
 
@@ -73,7 +95,16 @@ El reentrenamiento también debe considerarse antes si:
 - PSI de la demanda reciente alcanza `0.20` o más;
 - hay fallas repetidas del collector o submissions pendientes.
 
-## 6. Qué haríamos después
+## 6. Evidencia reproducible
+
+El workflow manual `Diagnose recent models` ejecuta
+`scripts/diagnose_recent.py` en modo solo lectura. Calcula durante los últimos
+36 orígenes horarios el accuracy oficial de champion, persistencia, modelos de
+ventana corta y selector; también imprime el promedio de los últimos seis
+ciclos. Todas las ventanas se cortan por el origen evaluado para evitar fuga de
+información futura.
+
+## 7. Qué haríamos después
 
 1. Esperar la activación del reloj y ejecutar el ciclo completo con observaciones
    reales reveladas.

@@ -15,6 +15,7 @@ import pandas as pd
 from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .baselines import FREQUENCY, HORIZONS
 from .db import SupabaseDB
+from .recent_models import observations_wide, predict_recent
 from .train import (
     LAG_STEPS,
     ROLLING_WINDOWS,
@@ -100,6 +101,172 @@ def routed_baseline_value(
     if method == "moving_average":
         return max(0.0, float(available.tail(4).mean()))
     return max(0.0, float(available.iloc[-1]))
+
+
+def predict_champion(
+    artifact: dict[str, Any],
+    history: pd.DataFrame,
+    targets: list[dict[str, Any]],
+    cutoff: pd.Timestamp,
+) -> np.ndarray:
+    """Predice targets en el orden recibido usando el artefacto champion."""
+    target_features, positions = build_target_features(history, targets, cutoff)
+    predictions = np.full(len(targets), np.nan, dtype=float)
+    station_models = artifact.get("station_models", {})
+    station_feature_columns = artifact.get("station_feature_columns", {})
+    level_adjustment_enabled = bool(
+        artifact.get("metadata", {}).get("level_adjustment", {}).get("enabled", False)
+    )
+    for horizon, indexes in positions.items():
+        if not indexes:
+            continue
+        if station_models:
+            values: list[float] = []
+            for index in indexes:
+                station_id = str(targets[index]["station_id"])
+                model = station_models.get(station_id, {}).get(str(horizon))
+                columns = station_feature_columns.get(station_id, {}).get(str(horizon))
+                if model is None or columns is None:
+                    raise RuntimeError(f"El champion no tiene modelo para {station_id} +{horizon}")
+                matrix, _ = encode_station_features(target_features.iloc[[index]], columns)
+                values.append(float(model.predict(matrix)[0]))
+            values = np.asarray(values, dtype=float)
+        else:
+            matrix, _ = encode_features(target_features.iloc[indexes], artifact["feature_columns"])
+            values = np.asarray(artifact["models"][horizon].predict(matrix), dtype=float)
+        for index, value in zip(indexes, values, strict=True):
+            station_id = str(targets[index]["station_id"])
+            route = artifact.get("metadata", {}).get("station_routes", {}).get(station_id, {}).get(str(horizon), "lightgbm")
+            if route != "lightgbm":
+                value = routed_baseline_value(
+                    history, station_id, utc(targets[index]["target_at"]), cutoff, route
+                )
+            elif level_adjustment_enabled:
+                value = float(value) * float(target_features.iloc[index]["level_factor"])
+            if not math.isfinite(float(value)):
+                raise RuntimeError(f"Predicción no finita para target {targets[index]}")
+            predictions[index] = max(0.0, float(value))
+    if not np.isfinite(predictions).all():
+        raise RuntimeError("El champion no produjo una predicción para cada target")
+    return predictions
+
+
+def _recent_frame_predictions(
+    history: pd.DataFrame,
+    origin: pd.Timestamp,
+    *,
+    window_h: int,
+    kind: str,
+) -> dict[tuple[str, int], float]:
+    frame = predict_recent(observations_wide(history), origin, window_h, [kind])
+    return {
+        (str(row.station_id), int(row.horizon) * 15): float(row.prediction)
+        for row in frame.itertuples()
+    }
+
+
+def _persist_predictions(
+    history: pd.DataFrame,
+    origin: pd.Timestamp,
+    stations: list[str],
+) -> dict[tuple[str, int], float]:
+    frame = history[history["ts"] <= origin]
+    values: dict[tuple[str, int], float] = {}
+    for station in stations:
+        series = frame[frame["station_id"].astype(str) == station].sort_values("ts")["value"]
+        if series.empty:
+            continue
+        for horizon in (15, 30, 45, 60):
+            values[(station, horizon)] = max(0.0, float(series.iloc[-1]))
+    return values
+
+
+def selector_predict(
+    history: pd.DataFrame,
+    targets: list[dict[str, Any]],
+    cutoff: pd.Timestamp,
+    champion_predict: Any,
+) -> np.ndarray:
+    """Elige por estación el modelo con menor WAPE en seis orígenes sombra."""
+    stations = sorted({str(target["station_id"]) for target in targets})
+    configs = {
+        "cross_ar_12h": (12, "cross_ar"),
+        "cross_ar_24h": (24, "cross_ar"),
+        "own_ar_12h": (12, "own_ar"),
+        "pooled_ar_24h": (24, "pooled_ar"),
+    }
+    current: dict[str, dict[tuple[str, int], float]] = {
+        "champion": {
+            (str(target["station_id"]), int((utc(target["target_at"]) - cutoff).total_seconds() // 60)): float(value)
+            for target, value in zip(targets, champion_predict(history, targets, cutoff), strict=True)
+        },
+        "persist": _persist_predictions(history, cutoff, stations),
+    }
+    for name, (window_h, kind) in configs.items():
+        try:
+            current[name] = _recent_frame_predictions(history, cutoff, window_h=window_h, kind=kind)
+        except Exception as exc:
+            print({"selector_model_error": name, "error": str(exc)[:500]})
+            current[name] = {}
+
+    scores: dict[str, dict[str, list[float]]] = {
+        name: {station: [] for station in stations}
+        for name in ["champion", "persist", *configs]
+    }
+    for hours_ago in range(1, 7):
+        origin = cutoff - pd.Timedelta(hours=hours_ago)
+        shadow_targets = [
+            {"station_id": station, "target_at": (origin + pd.Timedelta(minutes=horizon)).isoformat()}
+            for station in stations
+            for horizon in (15, 30, 45, 60)
+            if origin + pd.Timedelta(minutes=horizon) <= cutoff
+        ]
+        if not shadow_targets:
+            continue
+        actual_lookup = {
+            (str(row.station_id), utc(row.ts)): float(row.value)
+            for row in history[history["ts"] <= cutoff].itertuples()
+        }
+        candidates: dict[str, dict[tuple[str, int], float]] = {
+            "champion": {
+                (str(target["station_id"]), int((utc(target["target_at"]) - origin).total_seconds() // 60)): float(value)
+                for target, value in zip(shadow_targets, champion_predict(history, shadow_targets, origin), strict=True)
+            },
+            "persist": _persist_predictions(history, origin, stations),
+        }
+        for name, (window_h, kind) in configs.items():
+            try:
+                candidates[name] = _recent_frame_predictions(history, origin, window_h=window_h, kind=kind)
+            except Exception:
+                candidates[name] = {}
+        for target in shadow_targets:
+            station = str(target["station_id"])
+            target_at = utc(target["target_at"])
+            horizon = int((target_at - origin).total_seconds() // 60)
+            actual = actual_lookup.get((station, target_at))
+            if actual is None:
+                continue
+            for name, candidate_values in candidates.items():
+                prediction = candidate_values.get((station, horizon))
+                if prediction is not None:
+                    scores[name][station].append((abs(actual - prediction), actual))
+
+    choices: dict[str, str] = {}
+    for station in stations:
+        ranked: list[tuple[float, str]] = []
+        for name, station_scores in scores.items():
+            pairs = station_scores[station]
+            if pairs and sum(actual for _, actual in pairs) > 0:
+                ranked.append((sum(error for error, _ in pairs) / sum(actual for _, actual in pairs), name))
+        choices[station] = min(ranked)[1] if ranked else "champion"
+    print({"selector_choices": choices})
+    result: list[float] = []
+    for target, champion_value in zip(targets, current["champion"].values(), strict=True):
+        station = str(target["station_id"])
+        horizon = int((utc(target["target_at"]) - cutoff).total_seconds() // 60)
+        chosen = current.get(choices[station], {}).get((station, horizon), champion_value)
+        result.append(max(0.0, float(chosen)))
+    return np.asarray(result, dtype=float)
 
 
 def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], cutoff: pd.Timestamp) -> tuple[pd.DataFrame, dict[int, list[int]]]:
@@ -231,55 +398,67 @@ def run_inference(
         raise RuntimeError(f"No se pudo cargar el champion desde Storage: {exc}") from exc
 
     history = load_observations_until(db, cutoff)
-    target_features, positions = build_target_features(history, targets, cutoff)
-    predictions: list[dict[str, Any] | None] = [None] * len(targets)
-    station_models = artifact.get("station_models", {})
-    station_feature_columns = artifact.get("station_feature_columns", {})
-    level_adjustment_enabled = bool(
-        artifact.get("metadata", {}).get("level_adjustment", {}).get("enabled", False)
+    expected_stations = {str(target["station_id"]) for target in targets}
+    latest_by_station = history.groupby(history["station_id"].astype(str))["ts"].max()
+    stale = sorted(
+        station
+        for station in expected_stations
+        if station not in latest_by_station.index
+        or latest_by_station[station] < cutoff - pd.Timedelta(minutes=30)
     )
-    for horizon, indexes in positions.items():
-        if not indexes:
-            continue
-        if station_models:
-            values = []
-            for index in indexes:
-                station_id = str(targets[index]["station_id"])
-                model = station_models.get(station_id, {}).get(str(horizon))
-                columns = station_feature_columns.get(station_id, {}).get(str(horizon))
-                if model is None or columns is None:
-                    raise RuntimeError(f"El champion no tiene modelo para {station_id} +{horizon}")
-                matrix, _ = encode_station_features(
-                    target_features.iloc[[index]], columns
-                )
-                values.append(float(model.predict(matrix)[0]))
-            values = np.asarray(values, dtype=float)
-        else:
-            matrix, _ = encode_features(target_features.iloc[indexes], artifact["feature_columns"])
-            values = np.asarray(artifact["models"][horizon].predict(matrix), dtype=float)
-        for index, value in zip(indexes, values, strict=True):
-            station_id = str(targets[index]["station_id"])
-            route = artifact.get("metadata", {}).get("station_routes", {}).get(station_id, {}).get(str(horizon), "lightgbm")
-            if route != "lightgbm":
-                value = routed_baseline_value(
-                    history,
-                    station_id,
-                    utc(targets[index]["target_at"]),
-                    cutoff,
-                    route,
-                )
-            elif level_adjustment_enabled:
-                value = float(value) * float(target_features.iloc[index]["level_factor"])
-            if not math.isfinite(float(value)):
-                raise RuntimeError(f"Predicción no finita para target {targets[index]}")
-            predictions[index] = {
-                "station_id": str(targets[index]["station_id"]),
-                "target_at": utc(targets[index]["target_at"]).isoformat(),
-                "value": max(0.0, float(value)),
-            }
-    if any(item is None for item in predictions):
-        raise RuntimeError("No se generó una predicción para cada target del ciclo")
-    final_predictions = [item for item in predictions if item is not None]
+    if stale:
+        try:
+            from .collector import collect_once
+
+            refresh = collect_once(api, db, batch_size=250)
+            history = load_observations_until(db, cutoff)
+            latest_by_station = history.groupby(history["station_id"].astype(str))["ts"].max()
+            stale = sorted(
+                station
+                for station in expected_stations
+                if station not in latest_by_station.index
+                or latest_by_station[station] < cutoff - pd.Timedelta(minutes=30)
+            )
+            print({"freshness_refresh": refresh, "stale_stations": stale})
+        except Exception as exc:
+            print({"freshness_refresh_error": str(exc)[:500], "stale_stations": stale})
+    if stale:
+        try:
+            db.record_pipeline_event(
+                {
+                    "pipeline": "infer",
+                    "run_id": f"freshness-{cycle_id}",
+                    "cycle_id": cycle_id,
+                    "model_version": champion["version"],
+                    "status": "succeeded",
+                    "error": "Datos con más de 30 minutos de atraso: " + ",".join(stale),
+                    "details": {"stale_stations": stale, "cutoff": cutoff.isoformat()},
+                }
+            )
+        except Exception:
+            pass
+
+    champion_values = predict_champion(artifact, history, targets, cutoff)
+    try:
+        selected_values = selector_predict(
+            history,
+            targets,
+            cutoff,
+            lambda shadow_history, shadow_targets, shadow_cutoff: predict_champion(
+                artifact, shadow_history, shadow_targets, shadow_cutoff
+            ),
+        )
+    except Exception as exc:
+        print({"selector_error": str(exc)[:1000], "fallback": "champion"})
+        selected_values = champion_values
+    final_predictions = [
+        {
+            "station_id": str(target["station_id"]),
+            "target_at": utc(target["target_at"]).isoformat(),
+            "value": max(0.0, float(value)),
+        }
+        for target, value in zip(targets, selected_values, strict=True)
+    ]
     if len({(item["station_id"], item["target_at"]) for item in final_predictions}) != len(targets):
         raise RuntimeError("Hay targets duplicados o faltantes en las predicciones")
 

@@ -33,8 +33,8 @@ MIN_STATION_ACCURACY = 85.0
 MAX_STATION_REGRESSION = 3.0
 RECENCY_HALF_LIFE_DAYS = 14.0
 LEVEL_WINDOW_POINTS = 8  # 2 horas a frecuencia de 15 minutos
-LEVEL_MIN_FACTOR = 0.75
-LEVEL_MAX_FACTOR = 1.25
+LEVEL_MIN_FACTOR = 0.5
+LEVEL_MAX_FACTOR = 2.0
 MODEL_VARIANTS = {
     "stable": {"n_estimators": 260, "learning_rate": 0.035, "num_leaves": 15, "min_child_samples": 30},
     "standard": {"n_estimators": 350, "learning_rate": 0.04, "num_leaves": 31, "min_child_samples": 20},
@@ -83,7 +83,7 @@ def level_adjustment_factor(series: pd.Series, origin: pd.Timestamp) -> float:
     recent = available.tail(LEVEL_WINDOW_POINTS)
     pairs: list[tuple[float, float]] = []
     for timestamp, actual in recent.items():
-        expected = series.get(timestamp - pd.Timedelta(days=7))
+        expected = series.get(timestamp - pd.Timedelta(days=1))
         if expected is None or not np.isfinite(float(expected)) or float(expected) <= 0:
             continue
         pairs.append((float(actual), float(expected)))
@@ -432,6 +432,95 @@ def station_regression_guardrail(
     }
 
 
+def frame_regression_guardrail(
+    candidate_frame: pd.DataFrame,
+    reference_frame: pd.DataFrame,
+    *,
+    tolerance: float = MAX_STATION_REGRESSION,
+) -> dict[str, Any]:
+    """Compara el candidato contra predicciones realmente enviadas."""
+    candidate_scores = _accuracy_rows(
+        candidate_frame, ["station_id"], prediction_column="prediction"
+    ).rename(columns={"accuracy": "candidate_accuracy"})
+    reference_scores = _accuracy_rows(
+        reference_frame, ["station_id"], prediction_column="prediction"
+    ).rename(columns={"accuracy": "production_accuracy"})
+    comparison = candidate_scores.merge(reference_scores, on="station_id", how="inner")
+    comparison["delta_accuracy"] = comparison["candidate_accuracy"] - comparison["production_accuracy"]
+    worst = float(comparison["delta_accuracy"].min()) if not comparison.empty else 0.0
+    return {
+        "passed": bool(worst >= -tolerance),
+        "tolerance_points": tolerance,
+        "worst_station_delta": worst,
+        "regressions": comparison.loc[
+            comparison["delta_accuracy"] < -tolerance,
+            ["station_id", "candidate_accuracy", "production_accuracy", "delta_accuracy"],
+        ].to_dict("records"),
+    }
+
+
+def recent_production_comparison(
+    db: SupabaseDB,
+    candidate_frame: pd.DataFrame,
+) -> dict[str, Any]:
+    """Compara con submissions aceptadas cuyos targets ya fueron revelados."""
+    predictions = pd.DataFrame(
+        db.client.table("predictions")
+        .select("cycle_id,station_id,target_at,value,submission_id")
+        .execute()
+        .data
+        or []
+    )
+    actuals = pd.DataFrame(
+        db.client.table("actuals")
+        .select("cycle_id,station_id,target_at,value")
+        .execute()
+        .data
+        or []
+    )
+    if predictions.empty or actuals.empty:
+        return {"available": False, "reason": "sin submissions y actuals suficientes"}
+    predictions = predictions[predictions["submission_id"].notna()].copy()
+    if predictions.empty:
+        return {"available": False, "reason": "sin submissions aceptadas"}
+    for frame in (predictions, actuals):
+        frame["station_id"] = frame["station_id"].astype(str)
+        frame["target_at"] = pd.to_datetime(frame["target_at"], utc=True)
+    production = predictions.merge(
+        actuals,
+        on=["cycle_id", "station_id", "target_at"],
+        suffixes=("_prediction", "_actual"),
+    )
+    if production.empty:
+        return {"available": False, "reason": "sin targets revelados de submissions"}
+    end = production["target_at"].max()
+    production = production[production["target_at"] >= end - pd.Timedelta(hours=24)].copy()
+    candidate = candidate_frame.copy()
+    candidate["station_id"] = candidate["station_id"].astype(str)
+    candidate["target_at"] = pd.to_datetime(candidate["target_at"], utc=True)
+    keys = production[["station_id", "target_at"]].drop_duplicates()
+    candidate = candidate.merge(keys, on=["station_id", "target_at"], how="inner")
+    if candidate.empty:
+        return {"available": False, "reason": "el backtest no se solapa con la ventana enviada"}
+    production_frame = production[["station_id", "target_at", "value_actual", "value_prediction"]].rename(
+        columns={"value_actual": "actual", "value_prediction": "prediction"}
+    )
+    candidate_frame = candidate[["station_id", "target_at", "actual", "prediction"]]
+    actual_table = candidate_frame[["station_id", "target_at", "actual"]].rename(columns={"actual": "value"})
+    candidate_table = candidate_frame[["station_id", "target_at", "prediction"]].rename(columns={"prediction": "value"})
+    production_actual = production_frame[["station_id", "target_at", "actual"]].rename(columns={"actual": "value"})
+    production_prediction = production_frame[["station_id", "target_at", "prediction"]].rename(columns={"prediction": "value"})
+    return {
+        "available": True,
+        "window_end": end.isoformat(),
+        "targets": len(candidate_frame),
+        "candidate_accuracy": official_accuracy(actual_table, candidate_table),
+        "production_accuracy": official_accuracy(production_actual, production_prediction),
+        "production_frame": production_frame,
+        "candidate_frame": candidate_frame,
+    }
+
+
 def paired_bootstrap_improvement(
     candidate_frame: pd.DataFrame,
     champion_artifact: dict[str, Any],
@@ -707,6 +796,7 @@ def train_and_register(
     bucket: str = "model-artifacts",
     test_origins: int = 96,
     dataset_snapshot: dict[str, Any] | None = None,
+    promotion_cooldown_hours: float = 6.0,
 ) -> dict[str, Any]:
     db = db or SupabaseDB()
     (
@@ -743,6 +833,17 @@ def train_and_register(
     current_champion = current_champion_response.data[0] if current_champion_response.data else None
     champion_same_window_accuracy: float | None = None
     champion_evaluation_error: str | None = None
+    live_comparison = recent_production_comparison(db, validation_frame)
+    live_guardrail: dict[str, Any] = {
+        "passed": True,
+        "tolerance_points": MAX_STATION_REGRESSION,
+        "worst_station_delta": None,
+        "regressions": [],
+    }
+    if live_comparison.get("available"):
+        live_guardrail = frame_regression_guardrail(
+            live_comparison["candidate_frame"], live_comparison["production_frame"]
+        )
     station_guardrail: dict[str, Any] = {
         "passed": True,
         "tolerance_points": MAX_STATION_REGRESSION,
@@ -793,12 +894,17 @@ def train_and_register(
             "enabled": True,
             "window_points": LEVEL_WINDOW_POINTS,
             "bounds": [LEVEL_MIN_FACTOR, LEVEL_MAX_FACTOR],
-            "reference": "same_15_minute_slots_7_days_prior",
+        "reference": "same_15_minute_slots_1_day_prior",
         },
         "horizons_minutes": list(HORIZONS),
         "validation_accuracy": model_accuracy,
         "best_baseline_accuracy": best_baseline,
         "champion_same_window_accuracy": champion_same_window_accuracy,
+        "live_production_comparison": {
+            key: value
+            for key, value in live_comparison.items()
+            if key not in {"production_frame", "candidate_frame"}
+        },
         "validation_cycles": test_origins,
         "validation_metric": "official_unweighted_station_wape_hourly_cycles",
         "smoke_inference": smoke_ok,
@@ -836,6 +942,12 @@ def train_and_register(
                 "promotion_reference": max(MIN_PROMOTION_ACCURACY, best_baseline),
                 "significance": significance,
                 "station_guardrail": station_guardrail,
+                "live_production_comparison": {
+                    key: value
+                    for key, value in live_comparison.items()
+                    if key not in {"production_frame", "candidate_frame"}
+                },
+                "live_guardrail": live_guardrail,
                 "station_routes": station_routes,
                 "station_model_variants": station_model_variants,
                 "station_accuracy_target": MIN_STATION_ACCURACY,
@@ -849,30 +961,53 @@ def train_and_register(
         },
     )
 
-    promotion_reference = max(
-        MIN_PROMOTION_ACCURACY,
-        best_baseline,
-    )
+    promotion_reference = best_baseline
     station_scores = _accuracy_rows(
         validation_frame,
         ["station_id"],
         prediction_column="prediction",
     )
     minimum_station_accuracy = float(station_scores["accuracy"].min()) if not station_scores.empty else 0.0
-    station_floor_ok = minimum_station_accuracy >= MIN_STATION_ACCURACY
     beats_champion = current_champion is None or (
         champion_same_window_accuracy is not None
         and model_accuracy >= champion_same_window_accuracy + MIN_PROMOTION_MARGIN
         and significance["significant"]
     )
-    # 85 % es el objetivo, no un bloqueo absoluto: durante un cambio de
-    # demanda puede ser mejor promover un candidato de 83 % que supera al
-    # champion actual, en vez de conservar un modelo peor.
+    if live_comparison.get("available"):
+        reference_gate = (
+            float(live_comparison["candidate_accuracy"])
+            >= float(live_comparison["production_accuracy"]) + MIN_PROMOTION_MARGIN
+            and live_guardrail["passed"]
+        )
+    else:
+        reference_gate = beats_champion and station_guardrail["passed"]
+    promotion_cooldown_active = False
+    try:
+        recent_event = (
+            db.client.table("model_promotion_events")
+            .select("completed_at")
+            .eq("action", "promotion")
+            .eq("status", "succeeded")
+            .order("completed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if recent_event.data and recent_event.data[0].get("completed_at"):
+            completed_at = pd.Timestamp(recent_event.data[0]["completed_at"])
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.tz_localize("UTC")
+            promotion_cooldown_active = completed_at >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=promotion_cooldown_hours)
+    except Exception as exc:
+        print(f"Aviso: no se pudo consultar histéresis de promoción: {exc}")
+
+    # Durante drift no bloqueamos la promoción por un piso absoluto. El
+    # candidato debe superar el mejor baseline y mejorar lo que realmente se
+    # envió recientemente, sin romper una estación en más de 3 puntos.
     promoted = (
         model_accuracy > promotion_reference
-        and beats_champion
+        and reference_gate
         and smoke_ok
-        and station_guardrail["passed"]
+        and not promotion_cooldown_active
     )
     if promoted:
         previous_version = current_champion["version"] if current_champion else None
@@ -893,7 +1028,12 @@ def train_and_register(
                     "significance": significance,
                     "minimum_station_accuracy": minimum_station_accuracy,
                     "station_accuracy_target": MIN_STATION_ACCURACY,
-                    "station_floor_ok": station_floor_ok,
+                    "live_production_comparison": {
+                        key: value
+                        for key, value in live_comparison.items()
+                        if key not in {"production_frame", "candidate_frame"}
+                    },
+                    "live_guardrail": live_guardrail,
                 },
             },
         )
@@ -933,6 +1073,7 @@ def train_and_register(
         f"Modelo: {version} | accuracy={model_accuracy:.4f} | "
         f"umbral_promoción={promotion_reference:.4f} | "
         f"champion_mismo_corte={champion_same_window_accuracy} | "
+        f"cooldown={promotion_cooldown_active} | "
         f"status={'champion' if promoted else 'candidate'}"
     )
     return {"version": version, "comparison": comparison, "promoted": promoted, "artifact_path": artifact_path}

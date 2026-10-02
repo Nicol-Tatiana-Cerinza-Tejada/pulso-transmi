@@ -2,8 +2,9 @@ name: Snapshot, retrain and promote
 
 on:
   schedule:
-    # GitHub Actions usa UTC; revisa cada 20 minutos si hay drift o caída.
-    - cron: "*/20 * * * *"
+    # GitHub Actions usa UTC; revisa cada dos horas y evita promociones
+    # consecutivas mediante una histéresis de seis horas.
+    - cron: "0 */2 * * *"
   workflow_dispatch:
   repository_dispatch:
     types: [snapshot-retrain]
@@ -54,7 +55,7 @@ jobs:
       - name: Snapshot, retrain and promote if significant
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            python -m src.retrain --origins 96 --only-if-regressed --drop-points 3
+            python -m src.retrain --origins 96 --only-if-regressed --drop-points 3 --promotion-cooldown-hours 6
           else
-            python -m src.retrain --origins 96
+            python -m src.retrain --origins 96 --promotion-cooldown-hours 6
           fi

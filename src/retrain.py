@@ -111,6 +111,7 @@ def main() -> int:
     parser.add_argument("--origins", type=int, default=96)
     parser.add_argument("--only-if-regressed", action="store_true")
     parser.add_argument("--drop-points", type=float, default=3.0)
+    parser.add_argument("--promotion-cooldown-hours", type=float, default=6.0)
     args = parser.parse_args()
     db = SupabaseDB()
     run_id = f"retrain-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
@@ -139,6 +140,7 @@ def main() -> int:
             bucket=args.model_bucket,
             test_origins=args.origins,
             dataset_snapshot=snapshot,
+            promotion_cooldown_hours=args.promotion_cooldown_hours,
         )
     except Exception as exc:
         db.client.table("pipeline_events").update(
