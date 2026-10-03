@@ -238,4 +238,9 @@ class SupabaseDB:
 
     def record_pipeline_event(self, values: Mapping[str, Any]) -> None:
         """Persiste una decisión o fallo observable del pipeline."""
-        self.client.table("pipeline_events").insert(dict(values)).execute()
+        row = dict(values)
+        # started_at usa el reloj de la BD y finished_at el del runner; si el
+        # runner va unos milisegundos atrás se viola finished_at >= started_at.
+        if row.get("finished_at") and not row.get("started_at"):
+            row["started_at"] = row["finished_at"]
+        self.client.table("pipeline_events").insert(row).execute()
