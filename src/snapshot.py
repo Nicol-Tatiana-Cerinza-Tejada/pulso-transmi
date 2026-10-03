@@ -32,7 +32,7 @@ def load_observations(db: SupabaseDB, page_size: int = 1000) -> pd.DataFrame:
         raise RuntimeError("No hay observations para crear un snapshot")
     frame = pd.DataFrame(rows)
     frame["station_id"] = frame["station_id"].astype(str)
-    frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
     frame["value"] = pd.to_numeric(frame["value"], errors="raise").astype(int)
     return frame.sort_values(["ts", "station_id"]).reset_index(drop=True)
 
@@ -42,7 +42,7 @@ def canonical_csv(frame: pd.DataFrame) -> bytes:
     output = frame.copy()
     for column in ("ts", "released_at"):
         if column in output:
-            output[column] = pd.to_datetime(output[column], utc=True).map(
+            output[column] = pd.to_datetime(output[column], utc=True, format="ISO8601").map(
                 lambda value: "" if pd.isna(value) else value.isoformat()
             )
     output = output.reindex(columns=columns, fill_value="")

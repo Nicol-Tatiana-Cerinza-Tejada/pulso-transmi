@@ -14,21 +14,9 @@ from .metrics import align_targets, station_metrics
 
 
 def fetch_all(db: SupabaseDB, table: str, columns: str, page_size: int = 1000) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        response = (
-            db.client.table(table)
-            .select(columns)
-            .range(offset, offset + page_size - 1)
-            .execute()
-        )
-        page = list(response.data or [])
-        rows.extend(page)
-        if len(page) < page_size:
-            break
-        offset += page_size
-    return pd.DataFrame(rows)
+    # Ordena por la clave primaria: sin orden, PostgREST puede repetir u omitir
+    # filas entre páginas.
+    return pd.DataFrame(db.select_all(table, columns, page_size=page_size))
 
 
 def materialize_actuals(db: SupabaseDB, predictions: pd.DataFrame) -> int:
@@ -38,8 +26,8 @@ def materialize_actuals(db: SupabaseDB, predictions: pd.DataFrame) -> int:
     observations = fetch_all(db, "observations", "station_id,ts,value")
     if observations.empty:
         return 0
-    observations["ts"] = pd.to_datetime(observations["ts"], utc=True)
-    predictions["target_at"] = pd.to_datetime(predictions["target_at"], utc=True)
+    observations["ts"] = pd.to_datetime(observations["ts"], utc=True, format="ISO8601")
+    predictions["target_at"] = pd.to_datetime(predictions["target_at"], utc=True, format="ISO8601")
     observed = observations.rename(columns={"ts": "target_at", "value": "actual_value"})
     joined = predictions.merge(observed, on=["station_id", "target_at"], how="inner")
     if joined.empty:
@@ -97,11 +85,11 @@ def evaluate(db: SupabaseDB, api: PulsoTransmiClient) -> dict[str, Any]:
             "leaderboards": leaderboards,
         }
 
-    actuals["target_at"] = pd.to_datetime(actuals["target_at"], utc=True)
+    actuals["target_at"] = pd.to_datetime(actuals["target_at"], utc=True, format="ISO8601")
     if predictions.empty:
         predictions = pd.DataFrame(columns=["cycle_id", "station_id", "target_at", "value", "submission_id"])
     else:
-        predictions["target_at"] = pd.to_datetime(predictions["target_at"], utc=True)
+        predictions["target_at"] = pd.to_datetime(predictions["target_at"], utc=True, format="ISO8601")
     records: list[dict[str, Any]] = []
     for cycle_id, cycle_actuals in actuals.groupby("cycle_id"):
         cycle_predictions = (

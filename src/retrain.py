@@ -11,21 +11,17 @@ import pandas as pd
 
 from .snapshot import create_snapshot
 from .db import SupabaseDB
+from .metrics import cycle_timestamps
 from .train import train_and_register
 
 
 def regression_status(db: SupabaseDB, *, drop_points: float = 3.0, minimum_accuracy: float = 85.0) -> dict[str, Any]:
     """Detecta degradación global o localizada usando métricas ya reveladas."""
-    response = (
-        db.client.table("metrics")
-        .select("cycle_id,station_id,calculated_at,accuracy,coverage")
-        .order("calculated_at")
-        .execute()
-    )
-    frame = pd.DataFrame(response.data or [])
+    frame = pd.DataFrame(db.select_all("metrics", "cycle_id,station_id,calculated_at,accuracy,coverage"))
     if frame.empty:
         return {"should_retrain": False, "reason": "sin métricas reveladas"}
-    frame["calculated_at"] = pd.to_datetime(frame["calculated_at"], utc=True)
+    frame["calculated_at"] = pd.to_datetime(frame["calculated_at"], utc=True, format="ISO8601")
+    frame["cycle_at"] = cycle_timestamps(frame["cycle_id"])
     frame["station_id"] = frame["station_id"].astype(str)
     frame["coverage"] = pd.to_numeric(frame["coverage"], errors="coerce")
     # Una métrica con cobertura baja refleja targets ausentes; no debe
@@ -37,8 +33,9 @@ def regression_status(db: SupabaseDB, *, drop_points: float = 3.0, minimum_accur
     for station_id, station_frame in frame.groupby("station_id"):
         cycles = (
             station_frame.groupby("cycle_id")
-            .agg(accuracy=("accuracy", "mean"), calculated_at=("calculated_at", "max"))
-            .sort_values("calculated_at")
+            .agg(accuracy=("accuracy", "mean"), cycle_at=("cycle_at", "max"))
+            .reset_index()
+            .sort_values(["cycle_at", "cycle_id"])
         )
         if len(cycles) < 4:
             continue
@@ -87,8 +84,13 @@ def regression_status(db: SupabaseDB, *, drop_points: float = 3.0, minimum_accur
     latest_metric_at = frame["calculated_at"].max()
     new_metric_evidence = latest_metric_at > latest_model_at
     should = bool((station_reasons or open_drift) and new_metric_evidence)
-    recent = float(frame.groupby("cycle_id")["accuracy"].mean().tail(2).mean())
-    reference_cycles = frame.groupby("cycle_id")["accuracy"].mean()
+    reference_cycles = (
+        frame.groupby("cycle_id")
+        .agg(accuracy=("accuracy", "mean"), cycle_at=("cycle_at", "max"))
+        .reset_index()
+        .sort_values(["cycle_at", "cycle_id"])["accuracy"]
+    )
+    recent = float(reference_cycles.tail(2).mean())
     reference = float(reference_cycles.iloc[-8:-2].mean()) if len(reference_cycles) >= 8 else float(reference_cycles.iloc[:-2].mean())
     drop = reference - recent
     return {

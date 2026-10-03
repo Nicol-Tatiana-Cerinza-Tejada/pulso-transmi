@@ -97,3 +97,13 @@ def evaluate(
     aligned = align_targets(actuals, predictions, station_ids=station_ids)
     details = station_metrics(aligned)
     return (float(details["accuracy"].mean()), details)
+
+
+def cycle_timestamps(cycle_ids: pd.Series) -> pd.Series:
+    """Extrae el instante virtual del ciclo desde su id (``..._20260920T060000Z``).
+
+    ``metrics.calculated_at`` se reescribe en cada evaluación, así que no sirve
+    para ordenar ciclos. Si un id no trae instante, se ordena por el propio id.
+    """
+    extracted = cycle_ids.astype(str).str.extract(r"(\d{8}T\d{6}Z)$")[0]
+    return pd.to_datetime(extracted, format="%Y%m%dT%H%M%SZ", utc=True, errors="coerce")

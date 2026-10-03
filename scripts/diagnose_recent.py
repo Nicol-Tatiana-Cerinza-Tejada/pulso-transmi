@@ -91,7 +91,7 @@ def main() -> int:
                 & (history["ts"] == target_at - pd.Timedelta(days=7))
             ]["value"]
             weekly.append(float(previous_week.iloc[-1]) if not previous_week.empty else float("nan"))
-        selector = selector_predict(
+        selector, _ = selector_predict(
             history,
             targets,
             origin,

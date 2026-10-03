@@ -42,6 +42,9 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-student.txt
 
       - name: Collect latest observations
+        # Un timeout del API no debe impedir la entrega: infer.py vuelve a
+        # ingerir si los datos están atrasados y el retrain usa lo ya guardado.
+        continue-on-error: true
         run: |
           for attempt in 1 2 3; do
             python -m src.collector --batch-size 250 && exit 0

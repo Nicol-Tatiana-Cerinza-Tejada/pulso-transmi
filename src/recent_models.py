@@ -144,3 +144,40 @@ def predict_recent(
             raise ValueError(f"Modelo reciente desconocido: {kind}")
         rows.extend(_fit_predictions(frame, origin, window_h, kind))
     return pd.DataFrame(rows, columns=["kind", "station_id", "horizon", "prediction"])
+
+
+def predict_seasonal(
+    wide: pd.DataFrame,
+    origin: pd.Timestamp,
+    period: int,
+    cycles: int = 1,
+) -> pd.DataFrame:
+    """Naive estacional: promedia el mismo punto de los ``cycles`` periodos previos.
+
+    ``period`` está en intervalos de 15 minutos. Como el horizonte máximo
+    (4 intervalos) es menor que cualquier periodo usado, todos los valores
+    leídos son anteriores o iguales a ``origin``.
+    """
+    if period <= max(HORIZONS):
+        raise ValueError("period debe ser mayor que el horizonte máximo")
+    origin = pd.Timestamp(origin)
+    origin = origin.tz_localize("UTC") if origin.tzinfo is None else origin.tz_convert("UTC")
+    frame = _wide_frame(wide).loc[:origin]
+    rows: list[dict[str, Any]] = []
+    for horizon in HORIZONS:
+        target_at = origin + horizon * FREQUENCY
+        lagged = [target_at - cycle * period * FREQUENCY for cycle in range(1, cycles + 1)]
+        if any(timestamp not in frame.index for timestamp in lagged):
+            continue
+        values = frame.loc[lagged].mean(axis=0, skipna=False)
+        for station, value in values.items():
+            if np.isfinite(value):
+                rows.append(
+                    {
+                        "kind": f"seasonal_{period}x{cycles}",
+                        "station_id": str(station),
+                        "horizon": horizon,
+                        "prediction": max(0.0, float(value)),
+                    }
+                )
+    return pd.DataFrame(rows, columns=["kind", "station_id", "horizon", "prediction"])

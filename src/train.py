@@ -271,8 +271,8 @@ def station_balance_weights(frame: pd.DataFrame) -> np.ndarray:
 
 def recency_weights(frame: pd.DataFrame, *, half_life_days: float = RECENCY_HALF_LIFE_DAYS) -> np.ndarray:
     """Da más peso a cambios recientes sin eliminar toda la historia."""
-    reference = pd.to_datetime(frame["origin_at"], utc=True).max()
-    age_days = (reference - pd.to_datetime(frame["origin_at"], utc=True)).dt.total_seconds() / 86400.0
+    reference = pd.to_datetime(frame["origin_at"], utc=True, format="ISO8601").max()
+    age_days = (reference - pd.to_datetime(frame["origin_at"], utc=True, format="ISO8601")).dt.total_seconds() / 86400.0
     weights = np.exp(-np.log(2.0) * age_days.clip(lower=0.0) / half_life_days)
     weights = np.clip(weights.to_numpy(dtype=float), 0.35, 1.0)
     return weights / weights.mean()
@@ -464,20 +464,8 @@ def recent_production_comparison(
     candidate_frame: pd.DataFrame,
 ) -> dict[str, Any]:
     """Compara con submissions aceptadas cuyos targets ya fueron revelados."""
-    predictions = pd.DataFrame(
-        db.client.table("predictions")
-        .select("cycle_id,station_id,target_at,value,submission_id")
-        .execute()
-        .data
-        or []
-    )
-    actuals = pd.DataFrame(
-        db.client.table("actuals")
-        .select("cycle_id,station_id,target_at,value")
-        .execute()
-        .data
-        or []
-    )
+    predictions = pd.DataFrame(db.select_all("predictions", "cycle_id,station_id,target_at,value,submission_id"))
+    actuals = pd.DataFrame(db.select_all("actuals", "cycle_id,station_id,target_at,value"))
     if predictions.empty or actuals.empty:
         return {"available": False, "reason": "sin submissions y actuals suficientes"}
     predictions = predictions[predictions["submission_id"].notna()].copy()
@@ -485,7 +473,7 @@ def recent_production_comparison(
         return {"available": False, "reason": "sin submissions aceptadas"}
     for frame in (predictions, actuals):
         frame["station_id"] = frame["station_id"].astype(str)
-        frame["target_at"] = pd.to_datetime(frame["target_at"], utc=True)
+        frame["target_at"] = pd.to_datetime(frame["target_at"], utc=True, format="ISO8601")
     production = predictions.merge(
         actuals,
         on=["cycle_id", "station_id", "target_at"],
@@ -497,7 +485,7 @@ def recent_production_comparison(
     production = production[production["target_at"] >= end - pd.Timedelta(hours=24)].copy()
     candidate = candidate_frame.copy()
     candidate["station_id"] = candidate["station_id"].astype(str)
-    candidate["target_at"] = pd.to_datetime(candidate["target_at"], utc=True)
+    candidate["target_at"] = pd.to_datetime(candidate["target_at"], utc=True, format="ISO8601")
     keys = production[["station_id", "target_at"]].drop_duplicates()
     candidate = candidate.merge(keys, on=["station_id", "target_at"], how="inner")
     if candidate.empty:
@@ -543,9 +531,11 @@ def paired_bootstrap_improvement(
         on=["station_id", "target_at"],
         validate="one_to_one",
     )
-    candidate_metrics = station_metrics(paired.rename(columns={"prediction": "prediction"}))
+    candidate_metrics = station_metrics(paired.drop(columns=["champion_prediction"]))
+    # Se elimina la predicción del candidato antes de renombrar: si no, quedan
+    # dos columnas "prediction" y pandas falla con "duplicate labels".
     champion_metrics = station_metrics(
-        paired.rename(columns={"champion_prediction": "prediction"})
+        paired.drop(columns=["prediction"]).rename(columns={"champion_prediction": "prediction"})
     )
     station_scores = candidate_metrics[["station_id", "accuracy"]].merge(
         champion_metrics[["station_id", "accuracy"]],
@@ -784,7 +774,7 @@ def observations_from_supabase(db: SupabaseDB, page_size: int = 1000) -> pd.Data
     if not rows:
         raise RuntimeError("Supabase no tiene observations para entrenar")
     frame = pd.DataFrame(rows)
-    frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
     frame["value"] = pd.to_numeric(frame["value"], errors="raise")
     return frame
 
@@ -939,7 +929,9 @@ def train_and_register(
                 "validation_accuracy": model_accuracy,
                 "best_baseline_accuracy": best_baseline,
                 "champion_same_window_accuracy": champion_same_window_accuracy,
-                "promotion_reference": max(MIN_PROMOTION_ACCURACY, best_baseline),
+                "promotion_reference": best_baseline,
+                "promotion_target": MIN_PROMOTION_ACCURACY,
+                "champion_evaluation_error": champion_evaluation_error,
                 "significance": significance,
                 "station_guardrail": station_guardrail,
                 "live_production_comparison": {

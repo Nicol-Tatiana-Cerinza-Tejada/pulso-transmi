@@ -18,6 +18,23 @@ if TYPE_CHECKING:
 from .local_env import load_local_env
 
 
+# Clave primaria de cada tabla: orden estable para paginar sin solapes.
+TABLE_ORDER: dict[str, tuple[str, ...]] = {
+    "stations": ("station_id",),
+    "observations": ("ts", "station_id"),
+    "collector_runs": ("id",),
+    "model_versions": ("version",),
+    "predictions": ("cycle_id", "station_id", "target_at"),
+    "actuals": ("cycle_id", "station_id", "target_at"),
+    "metrics": ("cycle_id", "station_id"),
+    "drift_signals": ("id",),
+    "submission_receipts": ("participant_id", "cycle_id", "attempt"),
+    "leaderboard_snapshots": ("id",),
+    "model_promotion_events": ("id",),
+    "pipeline_events": ("id",),
+}
+
+
 class SupabaseConfigurationError(RuntimeError):
     """La configuración mínima de Supabase no está disponible."""
 
@@ -86,8 +103,35 @@ class SupabaseDB:
 
     def select(self, table: str, *, columns: str = "*") -> list[dict[str, Any]]:
         """Devuelve todas las filas seleccionadas de una tabla pública."""
-        response = self.client.table(table).select(columns).execute()
-        return list(response.data or [])
+        return self.select_all(table, columns)
+
+    def select_all(
+        self,
+        table: str,
+        columns: str = "*",
+        *,
+        order: Iterable[str] | None = None,
+        page_size: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Lee todas las filas paginando.
+
+        PostgREST corta cada respuesta en 1000 filas; sin paginar, una consulta
+        sobre predictions o metrics devuelve solo una parte. El orden por la
+        clave primaria hace que las páginas no se solapen ni dejen huecos.
+        """
+        order_columns = list(order) if order is not None else list(TABLE_ORDER.get(table, ()))
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            query = self.client.table(table).select(columns)
+            for column in order_columns:
+                query = query.order(column)
+            response = query.range(offset, offset + page_size - 1).execute()
+            page = list(response.data or [])
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+            offset += page_size
 
     def insert(self, table: str, rows: Mapping[str, Any] | Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
         """Inserta una fila o varias y devuelve las filas creadas."""

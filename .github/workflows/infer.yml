@@ -42,10 +42,14 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-student.txt
 
       - name: Collect incremental observations
+        # Un timeout del API no debe impedir la entrega: infer.py vuelve a
+        # ingerir si los datos están atrasados y el retrain usa lo ya guardado.
+        continue-on-error: true
+        timeout-minutes: 4
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2; do
             python -m src.collector --batch-size 250 && exit 0
-            if [ "$attempt" -lt 3 ]; then
+            if [ "$attempt" -lt 2 ]; then
               echo "Collector temporalmente indisponible; reintentando en 20 s"
               sleep 20
             fi

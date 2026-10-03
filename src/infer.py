@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,13 +16,14 @@ import pandas as pd
 from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .baselines import FREQUENCY, HORIZONS
 from .db import SupabaseDB
-from .recent_models import observations_wide, predict_recent
+from .recent_models import observations_wide, predict_recent, predict_seasonal
 from .train import (
     LAG_STEPS,
     ROLLING_WINDOWS,
     SHORT_TREND_WINDOW,
     encode_features,
     encode_station_features,
+    git_commit,
     level_adjustment_factor,
 )
 
@@ -68,7 +70,7 @@ def load_observations_until(db: SupabaseDB, cutoff: pd.Timestamp, page_size: int
     if not rows:
         raise RuntimeError(f"No hay observations hasta data_cutoff={cutoff.isoformat()}")
     frame = pd.DataFrame(rows)
-    frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
     frame["value"] = pd.to_numeric(frame["value"], errors="raise")
     return frame
 
@@ -151,14 +153,7 @@ def predict_champion(
     return predictions
 
 
-def _recent_frame_predictions(
-    history: pd.DataFrame,
-    origin: pd.Timestamp,
-    *,
-    window_h: int,
-    kind: str,
-) -> dict[tuple[str, int], float]:
-    frame = predict_recent(observations_wide(history), origin, window_h, [kind])
+def _frame_to_lookup(frame: pd.DataFrame) -> dict[tuple[str, int], float]:
     return {
         (str(row.station_id), int(row.horizon) * 15): float(row.prediction)
         for row in frame.itertuples()
@@ -166,14 +161,16 @@ def _recent_frame_predictions(
 
 
 def _persist_predictions(
-    history: pd.DataFrame,
+    wide: pd.DataFrame,
     origin: pd.Timestamp,
     stations: list[str],
 ) -> dict[tuple[str, int], float]:
-    frame = history[history["ts"] <= origin]
+    available = wide.loc[:origin]
     values: dict[tuple[str, int], float] = {}
     for station in stations:
-        series = frame[frame["station_id"].astype(str) == station].sort_values("ts")["value"]
+        if station not in available.columns:
+            continue
+        series = available[station].dropna()
         if series.empty:
             continue
         for horizon in (15, 30, 45, 60):
@@ -181,39 +178,77 @@ def _persist_predictions(
     return values
 
 
+# Candidatos del selector. Los AR de ventana corta capturan cambios de nivel;
+# los estacionales capturan ciclos periódicos (4 h apareció en el drift del
+# 18-sep virtual, 1 día y 1 semana son los ciclos del régimen original).
+RECENT_CONFIGS: dict[str, tuple[int, str]] = {
+    "cross_ar_12h": (12, "cross_ar"),
+    "cross_ar_24h": (24, "cross_ar"),
+    "own_ar_12h": (12, "own_ar"),
+    "pooled_ar_24h": (24, "pooled_ar"),
+}
+SEASONAL_CONFIGS: dict[str, tuple[int, int]] = {
+    "seasonal_4h": (16, 1),
+    "seasonal_4h_x2": (16, 2),
+    "seasonal_4h_x3": (16, 3),
+    "seasonal_1d": (96, 1),
+    "seasonal_1w": (672, 1),
+}
+SHADOW_ORIGINS = 6
+
+
+def _candidate_predictions(
+    wide: pd.DataFrame,
+    origin: pd.Timestamp,
+    stations: list[str],
+) -> dict[str, dict[tuple[str, int], float]]:
+    candidates: dict[str, dict[tuple[str, int], float]] = {
+        "persist": _persist_predictions(wide, origin, stations),
+    }
+    for name, (window_h, kind) in RECENT_CONFIGS.items():
+        try:
+            candidates[name] = _frame_to_lookup(predict_recent(wide, origin, window_h, [kind]))
+        except Exception as exc:
+            print({"selector_model_error": name, "error": str(exc)[:500]})
+            candidates[name] = {}
+    for name, (period, cycles) in SEASONAL_CONFIGS.items():
+        try:
+            candidates[name] = _frame_to_lookup(predict_seasonal(wide, origin, period, cycles))
+        except Exception as exc:
+            print({"selector_model_error": name, "error": str(exc)[:500]})
+            candidates[name] = {}
+    return candidates
+
+
 def selector_predict(
     history: pd.DataFrame,
     targets: list[dict[str, Any]],
     cutoff: pd.Timestamp,
     champion_predict: Any,
-) -> np.ndarray:
-    """Elige por estación el modelo con menor WAPE en seis orígenes sombra."""
-    stations = sorted({str(target["station_id"]) for target in targets})
-    configs = {
-        "cross_ar_12h": (12, "cross_ar"),
-        "cross_ar_24h": (24, "cross_ar"),
-        "own_ar_12h": (12, "own_ar"),
-        "pooled_ar_24h": (24, "pooled_ar"),
-    }
-    current: dict[str, dict[tuple[str, int], float]] = {
-        "champion": {
-            (str(target["station_id"]), int((utc(target["target_at"]) - cutoff).total_seconds() // 60)): float(value)
-            for target, value in zip(targets, champion_predict(history, targets, cutoff), strict=True)
-        },
-        "persist": _persist_predictions(history, cutoff, stations),
-    }
-    for name, (window_h, kind) in configs.items():
-        try:
-            current[name] = _recent_frame_predictions(history, cutoff, window_h=window_h, kind=kind)
-        except Exception as exc:
-            print({"selector_model_error": name, "error": str(exc)[:500]})
-            current[name] = {}
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Elige por estación el modelo con menor WAPE en orígenes sombra.
 
-    scores: dict[str, dict[str, list[float]]] = {
-        name: {station: [] for station in stations}
-        for name in ["champion", "persist", *configs]
+    Cada origen sombra usa solo observaciones hasta ese origen y se evalúa con
+    valores ya publicados antes del corte. Devuelve las predicciones y la
+    evidencia de la elección para guardarla junto a la submission.
+    """
+    stations = sorted({str(target["station_id"]) for target in targets})
+    available = history[history["ts"] <= cutoff]
+    wide = observations_wide(available)
+    current = _candidate_predictions(wide, cutoff, stations)
+    current["champion"] = {
+        (str(target["station_id"]), int((utc(target["target_at"]) - cutoff).total_seconds() // 60)): float(value)
+        for target, value in zip(targets, champion_predict(history, targets, cutoff), strict=True)
     }
-    for hours_ago in range(1, 7):
+
+    actual_lookup = {
+        (str(row.station_id), utc(row.ts)): float(row.value)
+        for row in available.itertuples()
+    }
+    errors: dict[str, dict[str, list[tuple[float, float]]]] = {
+        name: {station: [] for station in stations} for name in current
+    }
+    for hours_ago in range(1, SHADOW_ORIGINS + 1):
         origin = cutoff - pd.Timedelta(hours=hours_ago)
         shadow_targets = [
             {"station_id": station, "target_at": (origin + pd.Timedelta(minutes=horizon)).isoformat()}
@@ -223,22 +258,14 @@ def selector_predict(
         ]
         if not shadow_targets:
             continue
-        actual_lookup = {
-            (str(row.station_id), utc(row.ts)): float(row.value)
-            for row in history[history["ts"] <= cutoff].itertuples()
-        }
-        candidates: dict[str, dict[tuple[str, int], float]] = {
-            "champion": {
+        candidates = _candidate_predictions(wide, origin, stations)
+        try:
+            candidates["champion"] = {
                 (str(target["station_id"]), int((utc(target["target_at"]) - origin).total_seconds() // 60)): float(value)
                 for target, value in zip(shadow_targets, champion_predict(history, shadow_targets, origin), strict=True)
-            },
-            "persist": _persist_predictions(history, origin, stations),
-        }
-        for name, (window_h, kind) in configs.items():
-            try:
-                candidates[name] = _recent_frame_predictions(history, origin, window_h=window_h, kind=kind)
-            except Exception:
-                candidates[name] = {}
+            }
+        except Exception as exc:
+            print({"selector_model_error": "champion", "error": str(exc)[:500]})
         for target in shadow_targets:
             station = str(target["station_id"])
             target_at = utc(target["target_at"])
@@ -249,24 +276,33 @@ def selector_predict(
             for name, candidate_values in candidates.items():
                 prediction = candidate_values.get((station, horizon))
                 if prediction is not None:
-                    scores[name][station].append((abs(actual - prediction), actual))
+                    errors[name][station].append((abs(actual - prediction), actual))
 
     choices: dict[str, str] = {}
+    shadow_wape: dict[str, dict[str, float]] = {}
+    expected_pairs = SHADOW_ORIGINS * 4
     for station in stations:
         ranked: list[tuple[float, str]] = []
-        for name, station_scores in scores.items():
-            pairs = station_scores[station]
-            if pairs and sum(actual for _, actual in pairs) > 0:
-                ranked.append((sum(error for error, _ in pairs) / sum(actual for _, actual in pairs), name))
+        for name, station_errors in errors.items():
+            pairs = station_errors[station]
+            # Un candidato sin todos los orígenes sombra (p. ej. sin historia
+            # suficiente) no compite: su WAPE no sería comparable.
+            if len(pairs) < expected_pairs or not all((station, h) in current[name] for h in (15, 30, 45, 60)):
+                continue
+            actual_sum = sum(actual for _, actual in pairs)
+            if actual_sum > 0:
+                ranked.append((sum(error for error, _ in pairs) / actual_sum, name))
+        shadow_wape[station] = {name: round(wape, 4) for wape, name in sorted(ranked)[:4]}
         choices[station] = min(ranked)[1] if ranked else "champion"
-    print({"selector_choices": choices})
+    print({"selector_choices": choices, "shadow_wape_top": shadow_wape})
     result: list[float] = []
     for target, champion_value in zip(targets, current["champion"].values(), strict=True):
         station = str(target["station_id"])
         horizon = int((utc(target["target_at"]) - cutoff).total_seconds() // 60)
         chosen = current.get(choices[station], {}).get((station, horizon), champion_value)
         result.append(max(0.0, float(chosen)))
-    return np.asarray(result, dtype=float)
+    evidence = {"choices": choices, "shadow_wape_top": shadow_wape, "shadow_origins": SHADOW_ORIGINS}
+    return np.asarray(result, dtype=float), evidence
 
 
 def build_target_features(history: pd.DataFrame, targets: list[dict[str, Any]], cutoff: pd.Timestamp) -> tuple[pd.DataFrame, dict[int, list[int]]]:
@@ -348,6 +384,8 @@ def save_predictions(
     model_version: str,
     predictions: list[dict[str, Any]],
     cutoff: pd.Timestamp,
+    *,
+    row_models: dict[tuple[str, str], str] | None = None,
 ) -> None:
     rows = [
         {
@@ -356,7 +394,9 @@ def save_predictions(
             "target_at": utc(item["target_at"]).isoformat(),
             "value": item["value"],
             "horizon_minutes": int((utc(item["target_at"]) - cutoff).total_seconds() // 60),
-            "model_version": model_version,
+            "model_version": (row_models or {}).get(
+                (item["station_id"], utc(item["target_at"]).isoformat()), model_version
+            ),
             "submission_id": None,
         }
         for item in predictions
@@ -439,8 +479,9 @@ def run_inference(
             pass
 
     champion_values = predict_champion(artifact, history, targets, cutoff)
+    selector_evidence: dict[str, Any] = {"choices": {}, "fallback": "champion"}
     try:
-        selected_values = selector_predict(
+        selected_values, selector_evidence = selector_predict(
             history,
             targets,
             cutoff,
@@ -451,6 +492,8 @@ def run_inference(
     except Exception as exc:
         print({"selector_error": str(exc)[:1000], "fallback": "champion"})
         selected_values = champion_values
+        selector_evidence = {"choices": {}, "fallback": "champion", "error": str(exc)[:1000]}
+    choices: dict[str, str] = selector_evidence.get("choices", {})
     final_predictions = [
         {
             "station_id": str(target["station_id"]),
@@ -459,6 +502,15 @@ def run_inference(
         }
         for target, value in zip(targets, selected_values, strict=True)
     ]
+    # Modelo realmente usado por fila, para trazabilidad en predictions.
+    row_models = {
+        (item["station_id"], item["target_at"]): (
+            champion["version"]
+            if choices.get(item["station_id"], "champion") == "champion"
+            else f"selector:{choices[item['station_id']]}"
+        )
+        for item in final_predictions
+    }
     if len({(item["station_id"], item["target_at"]) for item in final_predictions}) != len(targets):
         raise RuntimeError("Hay targets duplicados o faltantes en las predicciones")
 
@@ -473,18 +525,31 @@ def run_inference(
     if attempt > 3:
         return {"status": "attempt_limit_reached"}
 
-    model = champion["version"]
+    if choices and any(choice != "champion" for choice in choices.values()):
+        # La versión identifica la combinación elegida; el detalle por
+        # estación queda en predictions.model_version y pipeline_events.
+        digest = hashlib.sha256(json.dumps(choices, sort_keys=True).encode()).hexdigest()[:10]
+        model = f"selector-{digest}"
+        model_trace = {
+            "version": model,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "training_data_end": cutoff.isoformat(),
+            "git_commit": git_commit() or champion.get("git_commit"),
+        }
+    else:
+        model = champion["version"]
+        model_trace = {
+            "version": model,
+            "trained_at": champion.get("created_at"),
+            "training_data_end": champion["data_cutoff"],
+            "git_commit": champion.get("git_commit"),
+        }
     payload = {
         "schema_version": "1.0",
         "cycle_id": cycle_id,
         "client_run_id": f"infer-{participant_id}-{cycle_id}-{attempt}",
         "data_cutoff": cutoff.isoformat(),
-        "model": {
-            "version": model,
-            "trained_at": champion.get("created_at"),
-            "training_data_end": champion["data_cutoff"],
-            "git_commit": champion.get("git_commit"),
-        },
+        "model": model_trace,
         "predictions": final_predictions,
     }
     key = attempt_record["idempotency_key"] if attempt_record else stable_idempotency_key(participant_id, cycle_id, attempt)
@@ -504,7 +569,9 @@ def run_inference(
                 "status": "pending",
             },
         )
-    save_predictions(db, cycle_id, model, final_predictions, cutoff)
+    if attempt_record:
+        row_models = {}
+    save_predictions(db, cycle_id, model, final_predictions, cutoff, row_models=row_models)
 
     try:
         receipt = api.create_submission(payload, idempotency_key=key)
@@ -539,6 +606,24 @@ def run_inference(
         {"status": "accepted", "submission_id": submission_id, "receipt": receipt, "updated_at": datetime.now(timezone.utc).isoformat()}
     ).eq("participant_id", participant_id).eq("cycle_id", cycle_id).eq("attempt", attempt).execute()
     db.client.table("predictions").update({"submission_id": submission_id}).eq("cycle_id", cycle_id).is_("submission_id", "null").execute()
+    try:
+        db.record_pipeline_event(
+            {
+                "pipeline": "infer",
+                "run_id": f"infer-{participant_id}-{cycle_id}-{attempt}",
+                "cycle_id": cycle_id,
+                "model_version": model,
+                "status": "succeeded",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "submission_id": submission_id,
+                    "champion": champion["version"],
+                    "selector": selector_evidence,
+                },
+            }
+        )
+    except Exception as exc:
+        print({"pipeline_event_error": str(exc)[:500]})
     return {"status": "accepted", "submission_id": submission_id, "attempt": attempt, "closes_at": closes_at.isoformat()}
 
 

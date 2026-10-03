@@ -36,7 +36,8 @@ en la distribución o en la relación temporal de la demanda.
 
 ## 3. Disparador y datos del entrenamiento
 
-El workflow `snapshot-retrain.yml` revisa el estado cada hora. Se entrena un
+El workflow `snapshot-retrain.yml` revisa el estado cada dos horas (cron de
+GitHub, que en la práctica puede atrasarse varias horas). Se entrena un
 candidato cuando existe evidencia nueva de caída localizada o una señal de
 drift abierta posterior al último modelo.
 

@@ -61,6 +61,36 @@ También se verifica la frescura: si una estación no tiene datos dentro de los
 30 minutos anteriores al corte, se intenta una ingesta adicional y se registra
 la advertencia sin inventar observaciones futuras.
 
+### 3.2 Cambio periódico del 18-sep virtual y correcciones
+
+Desde el 18-sep virtual (30-sep real) la demanda dejó de seguir el patrón
+diario y semanal: la forma intradía dejó de correlacionar con la referencia
+(de ~0,95 a ~0) y apareció una onda de 4 horas (16 intervalos) con grupos de
+estaciones desfasados. El champion LightGBM, que depende de rezagos de 1 día y
+1 semana, cayó a ~41 %, prácticamente igual que la persistencia.
+
+El selector incorpora candidatos estacionales (`seasonal_4h`, promedios de 2 y
+3 periodos de 4 h, `seasonal_1d`, `seasonal_1w`) que compiten con los AR de
+ventana corta en los mismos seis orígenes sombra. En un backtest de los
+últimos ciclos el selector obtuvo 91,5 %. Un candidato solo compite si tiene
+predicción en todos los orígenes sombra. La elección por estación y sus WAPE
+quedan guardados en `pipeline_events.details.selector`, en
+`predictions.model_version` (`selector:<candidato>`) y en la versión enviada
+(`selector-<hash>`).
+
+Correcciones del pipeline:
+
+- La prueba de significancia fallaba siempre (`duplicate labels`) porque
+  quedaban dos columnas `prediction`; por eso ningún candidato se promovía.
+  El error de evaluación del champion ahora se guarda en `training_metadata`.
+- Las lecturas de `metrics`, `predictions` y `actuals` quedaban cortadas en
+  1000 filas por PostgREST; ahora se pagina con orden por clave primaria.
+- Los ciclos se ordenan por su instante virtual y no por `calculated_at`, que
+  `evaluate.py` reescribe en cada ejecución.
+- El monitor parsea timestamps ISO-8601 con o sin microsegundos y marca como
+  `resolved` las señales cuya condición ya no se cumple.
+- Un timeout del collector ya no bloquea la inferencia ni el reentrenamiento.
+
 ## 4. Decisión de promoción
 
 Se comparó el promedio de accuracy de los cuatro horizontes contra el mejor
