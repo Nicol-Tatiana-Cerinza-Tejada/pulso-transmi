@@ -181,3 +181,41 @@ def predict_seasonal(
                     }
                 )
     return pd.DataFrame(rows, columns=["kind", "station_id", "horizon", "prediction"])
+
+
+def detect_period(
+    wide: pd.DataFrame,
+    origin: pd.Timestamp,
+    *,
+    window_h: int = 48,
+    min_period: int = 6,
+    max_period: int = 96,
+) -> int | None:
+    """Estima el periodo dominante (en intervalos) con autocorrelación reciente.
+
+    Usa solo datos hasta ``origin``. Devuelve ``None`` si ninguna estación
+    muestra un ciclo claro (autocorrelación media menor que 0,5).
+    """
+    origin = pd.Timestamp(origin)
+    origin = origin.tz_localize("UTC") if origin.tzinfo is None else origin.tz_convert("UTC")
+    frame = _wide_frame(wide).loc[:origin]
+    frame = frame.loc[frame.index > origin - pd.Timedelta(hours=window_h)].dropna(axis=1)
+    if len(frame) < 2 * max_period or frame.empty:
+        max_period = len(frame) // 2
+    if max_period < min_period:
+        return None
+    centered = (frame - frame.mean()) / frame.std().replace(0, np.nan)
+    centered = centered.dropna(axis=1)
+    if centered.empty:
+        return None
+    scores: dict[int, float] = {}
+    for lag in range(min_period, max_period + 1):
+        score = float(centered.apply(lambda column: column.autocorr(lag)).mean())
+        if np.isfinite(score):
+            scores[lag] = score
+    if not scores or max(scores.values()) < 0.5:
+        return None
+    # Los múltiplos del periodo tienen casi la misma autocorrelación; se
+    # elige el periodo más corto cercano al máximo (el fundamental).
+    best = max(scores.values())
+    return min(lag for lag, score in scores.items() if score >= 0.9 * best)

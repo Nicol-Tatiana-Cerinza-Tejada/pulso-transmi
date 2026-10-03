@@ -16,7 +16,7 @@ import pandas as pd
 from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .baselines import FREQUENCY, HORIZONS
 from .db import SupabaseDB
-from .recent_models import observations_wide, predict_recent, predict_seasonal
+from .recent_models import detect_period, observations_wide, predict_recent, predict_seasonal
 from .train import (
     LAG_STEPS,
     ROLLING_WINDOWS,
@@ -195,6 +195,9 @@ SEASONAL_CONFIGS: dict[str, tuple[int, int]] = {
     "seasonal_1w": (672, 1),
 }
 SHADOW_ORIGINS = 6
+# Peso de cada origen sombra según su antigüedad (1 h, 2 h, ...): tras un
+# cambio de régimen el selector reacciona antes que con pesos iguales.
+SHADOW_DECAY = 0.7
 
 
 def _candidate_predictions(
@@ -217,6 +220,21 @@ def _candidate_predictions(
         except Exception as exc:
             print({"selector_model_error": name, "error": str(exc)[:500]})
             candidates[name] = {}
+    # Periodo detectado en las últimas 48 h: cubre ciclos que no sean 4 h,
+    # 1 día o 1 semana si el drift cambia de forma.
+    try:
+        period = detect_period(wide, origin)
+    except Exception as exc:
+        print({"selector_model_error": "detect_period", "error": str(exc)[:500]})
+        period = None
+    for cycles in (1, 2):
+        name = f"seasonal_auto_x{cycles}"
+        candidates[name] = {}
+        if period is not None and period > max(HORIZONS) // 15:
+            try:
+                candidates[name] = _frame_to_lookup(predict_seasonal(wide, origin, period, cycles))
+            except Exception as exc:
+                print({"selector_model_error": name, "error": str(exc)[:500]})
     return candidates
 
 
@@ -248,6 +266,7 @@ def selector_predict(
     errors: dict[str, dict[str, list[tuple[float, float]]]] = {
         name: {station: [] for station in stations} for name in current
     }
+    detected_period = detect_period(wide, cutoff)
     for hours_ago in range(1, SHADOW_ORIGINS + 1):
         origin = cutoff - pd.Timedelta(hours=hours_ago)
         shadow_targets = [
@@ -273,10 +292,11 @@ def selector_predict(
             actual = actual_lookup.get((station, target_at))
             if actual is None:
                 continue
+            weight = SHADOW_DECAY ** (hours_ago - 1)
             for name, candidate_values in candidates.items():
                 prediction = candidate_values.get((station, horizon))
-                if prediction is not None:
-                    errors[name][station].append((abs(actual - prediction), actual))
+                if prediction is not None and name in errors:
+                    errors[name][station].append((weight * abs(actual - prediction), weight * actual))
 
     choices: dict[str, str] = {}
     shadow_wape: dict[str, dict[str, float]] = {}
@@ -301,7 +321,13 @@ def selector_predict(
         horizon = int((utc(target["target_at"]) - cutoff).total_seconds() // 60)
         chosen = current.get(choices[station], {}).get((station, horizon), champion_value)
         result.append(max(0.0, float(chosen)))
-    evidence = {"choices": choices, "shadow_wape_top": shadow_wape, "shadow_origins": SHADOW_ORIGINS}
+    evidence = {
+        "choices": choices,
+        "shadow_wape_top": shadow_wape,
+        "shadow_origins": SHADOW_ORIGINS,
+        "shadow_decay": SHADOW_DECAY,
+        "detected_period_intervals": detected_period,
+    }
     return np.asarray(result, dtype=float), evidence
 
 
@@ -384,8 +410,6 @@ def save_predictions(
     model_version: str,
     predictions: list[dict[str, Any]],
     cutoff: pd.Timestamp,
-    *,
-    row_models: dict[tuple[str, str], str] | None = None,
 ) -> None:
     rows = [
         {
@@ -394,9 +418,7 @@ def save_predictions(
             "target_at": utc(item["target_at"]).isoformat(),
             "value": item["value"],
             "horizon_minutes": int((utc(item["target_at"]) - cutoff).total_seconds() // 60),
-            "model_version": (row_models or {}).get(
-                (item["station_id"], utc(item["target_at"]).isoformat()), model_version
-            ),
+            "model_version": model_version,
             "submission_id": None,
         }
         for item in predictions
@@ -502,15 +524,7 @@ def run_inference(
         }
         for target, value in zip(targets, selected_values, strict=True)
     ]
-    # Modelo realmente usado por fila, para trazabilidad en predictions.
-    row_models = {
-        (item["station_id"], item["target_at"]): (
-            champion["version"]
-            if choices.get(item["station_id"], "champion") == "champion"
-            else f"selector:{choices[item['station_id']]}"
-        )
-        for item in final_predictions
-    }
+
     if len({(item["station_id"], item["target_at"]) for item in final_predictions}) != len(targets):
         raise RuntimeError("Hay targets duplicados o faltantes en las predicciones")
 
@@ -569,9 +583,9 @@ def run_inference(
                 "status": "pending",
             },
         )
-    if attempt_record:
-        row_models = {}
-    save_predictions(db, cycle_id, model, final_predictions, cutoff, row_models=row_models)
+    # predictions.model_version es FK a model_versions: se guarda el champion
+    # registrado y la elección por estación queda en pipeline_events.
+    save_predictions(db, cycle_id, champion["version"], final_predictions, cutoff)
 
     try:
         receipt = api.create_submission(payload, idempotency_key=key)
