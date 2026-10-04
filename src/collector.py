@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import math
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from .api_client import PulsoTransmiClient, PulsoTransmiError
@@ -25,19 +27,51 @@ def to_utc_iso(value: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat()
 
 
+def observation_value(row: Mapping[str, Any]) -> int | None:
+    """Lee la demanda en el contrato v1 (``demand``) o v2 (``measurement``).
+
+    En v2 ``measurement.value`` es texto decimal o ``null`` con
+    ``quality == "missing"``. Un faltante no es cero: se devuelve ``None`` y la
+    fila no se guarda, de modo que los modelos lo traten como hueco.
+    """
+    if "measurement" in row or row.get("schema_version") == 2:
+        measurement = row.get("measurement") or {}
+        raw = measurement.get("value")
+        if measurement.get("quality") == "missing" or raw is None:
+            return None
+        if measurement.get("unit", "passengers") != "passengers":
+            raise ValueError(f"Unidad no soportada: {measurement.get('unit')!r}")
+        value = float(Decimal(str(raw)))
+    else:
+        value = float(row["demand"])
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"Demanda inválida para {row.get('station_id')}: {value!r}")
+    return int(round(value))
+
+
 def normalize_observations(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "station_id": row["station_id"],
-            "ts": to_utc_iso(str(row["observed_at"])),
-            "value": row["demand"],
-            "released_at": to_utc_iso(str(row["released_at"]))
-            if row.get("released_at")
-            else None,
-            "source": "pulso-transmi-api-stream",
-        }
-        for row in rows
-    ]
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        value = observation_value(row)
+        if value is None:
+            continue
+        version = int(row.get("schema_version") or 1)
+        normalized.append(
+            {
+                "station_id": row["station_id"],
+                "ts": to_utc_iso(str(row["observed_at"])),
+                "value": value,
+                "released_at": to_utc_iso(str(row["released_at"]))
+                if row.get("released_at")
+                else None,
+                "source": "pulso-transmi-api-stream" if version == 1 else f"pulso-transmi-api-stream-v{version}",
+            }
+        )
+    return normalized
+
+
+def count_missing(rows: list[Mapping[str, Any]]) -> int:
+    return sum(1 for row in rows if observation_value(row) is None)
 
 
 def collect_once(
@@ -75,6 +109,8 @@ def collect_once(
         before_count = db.observation_count()
         pages = 0
         rows_processed = 0
+        rows_missing = 0
+        schema_versions: set[int] = set()
         cursor_reset = False
 
         while True:
@@ -100,6 +136,8 @@ def collect_once(
                 raise
             raw_rows = list(page.get("data") or [])
             rows = normalize_observations(raw_rows)
+            rows_missing += len(raw_rows) - len(rows)
+            schema_versions.update(int(row.get("schema_version") or 1) for row in raw_rows)
             if rows:
                 db.upsert_observations(rows)
                 rows_processed += len(rows)
@@ -125,6 +163,8 @@ def collect_once(
             "status": "succeeded",
             "rows": rows_processed,
             "rows_new": rows_new,
+            "rows_missing": rows_missing,
+            "schema_versions": sorted(schema_versions),
             "pages": pages,
             "cursor": checkpoint,
             "cursor_reset": cursor_reset,

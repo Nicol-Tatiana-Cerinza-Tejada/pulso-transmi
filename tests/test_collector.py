@@ -86,3 +86,29 @@ def test_repeated_data_is_idempotent_and_checkpoint_follows_upsert() -> None:
     assert len(db.rows) == 1
     assert len(db.runs) == 2
     assert all(run["status"] == "succeeded" for run in db.runs)
+
+
+def observation_v2(value: str | None, quality: str = "observed", minute: int = 15) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "station_id": "02300",
+        "observed_at": f"2026-09-20T12:{minute:02d}:00Z",
+        "released_at": "2026-09-20T12:30:00Z",
+        "measurement": {"value": value, "unit": "passengers", "quality": quality},
+    }
+
+
+def test_v2_and_v1_rows_in_same_page_are_normalized() -> None:
+    db = FakeDB()
+    page = {
+        "data": [observation(), observation_v2("341.00"), observation_v2(None, "missing", 30)],
+        "count": 3,
+        "next_cursor": None,
+    }
+    result = collect_once(FakeAPI([page]), db)
+    assert result["status"] == "succeeded"
+    assert result["rows_missing"] == 1
+    assert result["schema_versions"] == [1, 2]
+    values = {row["ts"]: row["value"] for row in db.rows.values()}
+    assert values["2026-09-20T12:15:00+00:00"] == 341
+    assert "2026-09-20T12:30:00+00:00" not in values
