@@ -16,7 +16,14 @@ import pandas as pd
 from .api_client import PulsoTransmiClient, PulsoTransmiError
 from .baselines import FREQUENCY, HORIZONS
 from .db import SupabaseDB
-from .recent_models import detect_period, observations_wide, predict_recent, predict_seasonal
+from .recent_models import (
+    detect_period,
+    observations_wide,
+    predict_holt,
+    predict_local_trend,
+    predict_recent,
+    predict_seasonal,
+)
 from .train import (
     LAG_STEPS,
     ROLLING_WINDOWS,
@@ -194,10 +201,18 @@ SEASONAL_CONFIGS: dict[str, tuple[int, int]] = {
     "seasonal_1d": (96, 1),
     "seasonal_1w": (672, 1),
 }
+TREND_CONFIGS: dict[str, tuple[int, float]] = {
+    "trend_3_0.7": (3, 0.7),
+    "trend_4_0.8": (4, 0.8),
+}
 SHADOW_ORIGINS = 6
 # Peso de cada origen sombra según su antigüedad (1 h, 2 h, ...): tras un
 # cambio de régimen el selector reacciona antes que con pesos iguales.
 SHADOW_DECAY = 0.7
+# Mejora relativa de WAPE que exige un candidato por estación frente al global.
+# 1.0 desactiva la elección por estación: en backtests de la fase final el
+# global dio 76,1 % (por estación 73,7 %) y en el régimen de 4 h 92,3 % (91,5 %).
+SELECTOR_MARGIN = 1.0
 
 
 def _candidate_predictions(
@@ -220,7 +235,20 @@ def _candidate_predictions(
         except Exception as exc:
             print({"selector_model_error": name, "error": str(exc)[:500]})
             candidates[name] = {}
-    # Periodo detectado en las últimas 48 h: cubre ciclos que no sean 4 h,
+    # Tendencia local: cubre oscilaciones de periodo irregular y ruidosas,
+    # como las de la fase final (contrato v2).
+    for name, (points, damping) in TREND_CONFIGS.items():
+        try:
+            candidates[name] = _frame_to_lookup(predict_local_trend(wide, origin, points, damping))
+        except Exception as exc:
+            print({"selector_model_error": name, "error": str(exc)[:500]})
+            candidates[name] = {}
+    try:
+        candidates["holt"] = _frame_to_lookup(predict_holt(wide, origin))
+    except Exception as exc:
+        print({"selector_model_error": "holt", "error": str(exc)[:500]})
+        candidates["holt"] = {}
+    # Periodo detectado en las últimas 24 h: cubre ciclos que no sean 4 h,
     # 1 día o 1 semana si el drift cambia de forma.
     try:
         period = detect_period(wide, origin)
@@ -298,23 +326,53 @@ def selector_predict(
                 if prediction is not None and name in errors:
                     errors[name][station].append((weight * abs(actual - prediction), weight * actual))
 
-    choices: dict[str, str] = {}
-    shadow_wape: dict[str, dict[str, float]] = {}
-    expected_pairs = SHADOW_ORIGINS * 4
+    # WAPE sombra por estación. Solo compiten candidatos con la misma cantidad
+    # de pares que el más completo: con faltantes (contrato v2) el máximo puede
+    # ser menor que SHADOW_ORIGINS * 4 y no debe excluir a todos.
+    station_wape: dict[str, dict[str, float]] = {}
     for station in stations:
-        ranked: list[tuple[float, str]] = []
+        counts = {name: len(station_errors[station]) for name, station_errors in errors.items()}
+        complete = max(counts.values(), default=0)
+        station_wape[station] = {}
+        if complete == 0:
+            continue
         for name, station_errors in errors.items():
             pairs = station_errors[station]
-            # Un candidato sin todos los orígenes sombra (p. ej. sin historia
-            # suficiente) no compite: su WAPE no sería comparable.
-            if len(pairs) < expected_pairs or not all((station, h) in current[name] for h in (15, 30, 45, 60)):
+            if len(pairs) < complete or not all((station, h) in current[name] for h in (15, 30, 45, 60)):
                 continue
             actual_sum = sum(actual for _, actual in pairs)
             if actual_sum > 0:
-                ranked.append((sum(error for error, _ in pairs) / actual_sum, name))
-        shadow_wape[station] = {name: round(wape, 4) for wape, name in sorted(ranked)[:4]}
-        choices[station] = min(ranked)[1] if ranked else "champion"
-    print({"selector_choices": choices, "shadow_wape_top": shadow_wape})
+                station_wape[station][name] = sum(error for error, _ in pairs) / actual_sum
+
+    # Candidato global: menor WAPE medio entre estaciones (como la métrica
+    # oficial). Con seis orígenes ruidosos, elegir por estación sobreajusta; solo
+    # se cambia a otro candidato si mejora el global por SELECTOR_MARGIN.
+    global_scores: dict[str, list[float]] = {}
+    for scores_by_name in station_wape.values():
+        for name, wape in scores_by_name.items():
+            global_scores.setdefault(name, []).append(wape)
+    eligible = {
+        name: float(np.mean(values))
+        for name, values in global_scores.items()
+        if len(values) == max(len(v) for v in global_scores.values())
+    }
+    global_choice = min(eligible, key=eligible.get) if eligible else "champion"
+
+    choices: dict[str, str] = {}
+    shadow_wape: dict[str, dict[str, float]] = {}
+    for station in stations:
+        ranked = sorted((wape, name) for name, wape in station_wape[station].items())
+        shadow_wape[station] = {name: round(wape, 4) for wape, name in ranked[:4]}
+        if not ranked:
+            choices[station] = "champion"
+            continue
+        best_wape, best_name = ranked[0]
+        global_wape = station_wape[station].get(global_choice)
+        if global_wape is None or best_wape < (1 - SELECTOR_MARGIN) * global_wape:
+            choices[station] = best_name
+        else:
+            choices[station] = global_choice
+    print({"selector_choices": choices, "global_choice": global_choice, "shadow_wape_top": shadow_wape})
     result: list[float] = []
     for target, champion_value in zip(targets, current["champion"].values(), strict=True):
         station = str(target["station_id"])
@@ -323,6 +381,9 @@ def selector_predict(
         result.append(max(0.0, float(chosen)))
     evidence = {
         "choices": choices,
+        "global_choice": global_choice,
+        "global_wape_top": {name: round(eligible[name], 4) for name in sorted(eligible, key=eligible.get)[:5]},
+        "selector_margin": SELECTOR_MARGIN,
         "shadow_wape_top": shadow_wape,
         "shadow_origins": SHADOW_ORIGINS,
         "shadow_decay": SHADOW_DECAY,

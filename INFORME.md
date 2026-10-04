@@ -91,6 +91,29 @@ Correcciones del pipeline:
   `resolved` las señales cuya condición ya no se cumple.
 - Un timeout del collector ya no bloquea la inferencia ni el reentrenamiento.
 
+### 3.3 Fase final: contrato v2 y régimen ruidoso
+
+Detección: desde `2026-09-20T12:00Z` virtual el stream cambió al contrato v2
+(`measurement.value` como texto, `quality = missing` sin valor) y el collector
+falló con `KeyError: 'demand'` en cada ejecución. La inferencia siguió
+entregando, pero con datos congelados, y la accuracy de los últimos seis ciclos
+cayó a ~14 %. La señal estaba en `collector_runs.error`.
+
+Reparación: el collector lee v1 y v2 en la misma página, convierte el decimal a
+entero y no guarda los faltantes (no son cero). Cada ejecución reporta
+`rows_missing` y las versiones vistas. La primera ingesta recuperó 634
+observaciones (14 faltantes, ~2 %).
+
+Adaptación: el régimen nuevo oscila con periodo irregular (~7-8 h) y bastante
+ruido; los estacionales caen a 26-42 % y la persistencia da 71 %. Se añadieron
+candidatos de tendencia local amortiguada y Holt (75 %). El selector usaba
+24 pares fijos por estación; con faltantes descartaba todos los candidatos, y
+ahora compara con el máximo disponible. La elección pasó a ser global (menor
+WAPE medio entre estaciones): con seis orígenes ruidosos, elegir por estación
+sobreajustaba. Backtest en el régimen nuevo: 76,1 % (por estación 73,7 %); en
+el régimen de 4 h: 92,3 %. La elección global y el top de WAPE quedan en
+`pipeline_events.details.selector`.
+
 ## 4. Decisión de promoción
 
 Se comparó el promedio de accuracy de los cuatro horizontes contra el mejor

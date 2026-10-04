@@ -187,13 +187,14 @@ def detect_period(
     wide: pd.DataFrame,
     origin: pd.Timestamp,
     *,
-    window_h: int = 48,
+    window_h: int = 24,
     min_period: int = 6,
-    max_period: int = 96,
+    max_period: int = 48,
 ) -> int | None:
     """Estima el periodo dominante (en intervalos) con autocorrelación reciente.
 
-    Usa solo datos hasta ``origin``. Devuelve ``None`` si ninguna estación
+    Usa solo datos hasta ``origin``. La ventana corta (24 h) se adapta en un
+    día a un cambio de periodo; el ciclo diario lo cubre ``seasonal_1d``. Devuelve ``None`` si ninguna estación
     muestra un ciclo claro (autocorrelación media menor que 0,5).
     """
     origin = pd.Timestamp(origin)
@@ -219,3 +220,65 @@ def detect_period(
     # elige el periodo más corto cercano al máximo (el fundamental).
     best = max(scores.values())
     return min(lag for lag, score in scores.items() if score >= 0.9 * best)
+
+
+def _recent_values(frame: pd.DataFrame, points: int) -> pd.DataFrame:
+    return frame.tail(points).interpolate(limit_direction="both")
+
+
+def predict_local_trend(
+    wide: pd.DataFrame,
+    origin: pd.Timestamp,
+    points: int = 4,
+    damping: float = 0.7,
+) -> pd.DataFrame:
+    """Último valor más la pendiente media reciente, amortiguada por horizonte.
+
+    Útil cuando la demanda oscila con periodo irregular: sigue la fase actual
+    sin depender de que el ciclo se repita igual.
+    """
+    origin = pd.Timestamp(origin)
+    origin = origin.tz_localize("UTC") if origin.tzinfo is None else origin.tz_convert("UTC")
+    recent = _recent_values(_wide_frame(wide).loc[:origin], points + 1)
+    if len(recent) < points + 1:
+        return pd.DataFrame(columns=["kind", "station_id", "horizon", "prediction"])
+    slope = recent.diff().iloc[1:].mean()
+    last = recent.iloc[-1]
+    rows = []
+    for horizon in HORIZONS:
+        factor = sum(damping**step for step in range(1, horizon + 1))
+        for station in recent.columns:
+            value = float(last[station] + slope[station] * factor)
+            if np.isfinite(value):
+                rows.append({"kind": f"trend_{points}_{damping}", "station_id": str(station), "horizon": horizon, "prediction": max(0.0, value)})
+    return pd.DataFrame(rows, columns=["kind", "station_id", "horizon", "prediction"])
+
+
+def predict_holt(
+    wide: pd.DataFrame,
+    origin: pd.Timestamp,
+    alpha: float = 0.7,
+    beta: float = 0.5,
+    phi: float = 0.8,
+    points: int = 24,
+) -> pd.DataFrame:
+    """Suavizado exponencial de Holt con tendencia amortiguada (ventana corta)."""
+    origin = pd.Timestamp(origin)
+    origin = origin.tz_localize("UTC") if origin.tzinfo is None else origin.tz_convert("UTC")
+    recent = _recent_values(_wide_frame(wide).loc[:origin], points)
+    if len(recent) < 3:
+        return pd.DataFrame(columns=["kind", "station_id", "horizon", "prediction"])
+    rows = []
+    for station in recent.columns:
+        values = recent[station].to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            continue
+        level, trend = values[0], values[1] - values[0]
+        for value in values[1:]:
+            previous = level
+            level = alpha * value + (1 - alpha) * (level + phi * trend)
+            trend = beta * (level - previous) + (1 - beta) * phi * trend
+        for horizon in HORIZONS:
+            factor = sum(phi**step for step in range(1, horizon + 1))
+            rows.append({"kind": "holt", "station_id": str(station), "horizon": horizon, "prediction": max(0.0, float(level + trend * factor))})
+    return pd.DataFrame(rows, columns=["kind", "station_id", "horizon", "prediction"])
